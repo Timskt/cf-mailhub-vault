@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MailHub & Vault - 全能邮箱矩阵与平台账号资产中心</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📬</text></svg>">
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body class="dark-theme">
+  <div id="app">
+    <!-- 顶部导航栏 -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <span class="brand-logo">📬</span>
+        <div class="brand-text">
+          <h1>MailHub & Vault</h1>
+          <span class="sub-title">全能邮箱矩阵与账号资产中心</span>
+        </div>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="vault">📋 平台台账</button>
+        <button class="nav-tab" data-tab="cf-mails">📬 自建收信箱 <span id="cfMailCountBadge" class="badge-count">0</span></button>
+        <button class="nav-tab" data-tab="outlook">🏢 Outlook 矩阵</button>
+        <button class="nav-tab" data-tab="api-doc">⚡ 自动化 API</button>
+        <button class="nav-tab" data-tab="settings">⚙️ 设置</button>
+      </nav>
+      <div class="nav-actions">
+        <button id="themeToggleBtn" class="btn-icon" title="切换深浅主题">🌓</button>
+        <button id="logoutBtn" class="btn-sm btn-outline">退出</button>
+      </div>
+    </header>
+
+    <!-- 主体容器 -->
+    <main class="main-container">
+
+      <!-- ================= 视图 1: 平台账号台账 ================= -->
+      <section id="view-vault" class="tab-view active">
+        <!-- 看板卡片 -->
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon bg-blue">🏢</div>
+            <div class="stat-info">
+              <span class="stat-value" id="statTotalVault">0</span>
+              <span class="stat-label">已登记平台账号</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon bg-green">✨</div>
+            <div class="stat-info">
+              <span class="stat-value" id="statActiveVault">0</span>
+              <span class="stat-label">活跃正常账号</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon bg-purple">📬</div>
+            <div class="stat-info">
+              <span class="stat-value" id="statCfMails">0</span>
+              <span class="stat-label">自建域名已收信</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon bg-orange">🔑</div>
+            <div class="stat-info">
+              <span class="stat-value" id="statOutlook">0</span>
+              <span class="stat-label">Outlook 托管账号</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 过滤工具栏 -->
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="search-box">
+              <input type="text" id="vaultSearchInput" placeholder="搜索平台、邮箱、用户名或备注..." />
+            </div>
+            <select id="vaultCategoryFilter" class="select-control">
+              <option value="">全部分类</option>
+              <option value="AI工具">AI工具</option>
+              <option value="开发服务">开发服务</option>
+              <option value="社交媒体">社交媒体</option>
+              <option value="订阅平台">订阅平台</option>
+              <option value="其他">其他</option>
+            </select>
+            <select id="vaultStatusFilter" class="select-control">
+              <option value="">全部状态</option>
+              <option value="active">正常活跃</option>
+              <option value="pending">待验证</option>
+              <option value="banned">已封禁</option>
+              <option value="deprecated">已废弃</option>
+            </select>
+          </div>
+          <div class="toolbar-right">
+            <button id="openNewVaultModalBtn" class="btn btn-primary">➕ 登记平台账号</button>
+            <button id="exportVaultBtn" class="btn btn-secondary">📤 导出备份</button>
+          </div>
+        </div>
+
+        <!-- 台账数据表格 -->
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>平台名称</th>
+                <th>绑定邮箱</th>
+                <th>用户名</th>
+                <th>密码</th>
+                <th>分类</th>
+                <th>状态</th>
+                <th>⚡ 最新验证码</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="vaultTableBody">
+              <tr><td colspan="8" class="text-center py-4">正在加载台账数据...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 视图 2: 自建域名收信箱 ================= -->
+      <section id="view-cf-mails" class="tab-view">
+        <div class="inbox-layout">
+          <!-- 左侧收件地址过滤 -->
+          <div class="inbox-sidebar">
+            <div class="sidebar-header">
+              <h3>收件地址</h3>
+              <button id="refreshMailsBtn" class="btn-icon" title="刷新收件箱">🔄</button>
+            </div>
+            <div class="recipient-filter-list" id="recipientList">
+              <div class="recipient-item active" data-email="">
+                <span>全部收件箱</span>
+                <span class="badge" id="totalRecipientCount">0</span>
+              </div>
+            </div>
+            <div class="sidebar-footer">
+              <button id="cleanUnprotectedMailsBtn" class="btn btn-danger btn-block">🧹 清理临时测试邮件</button>
+            </div>
+          </div>
+
+          <!-- 右侧邮件列表 -->
+          <div class="inbox-main">
+            <div class="toolbar">
+              <div class="search-box">
+                <input type="text" id="mailSearchInput" placeholder="按发件人、主题、验证码搜索邮件..." />
+              </div>
+            </div>
+            <div class="mail-list" id="mailListContainer">
+              <div class="empty-state">暂无邮件</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 3: Outlook 账号矩阵 ================= -->
+      <section id="view-outlook" class="tab-view">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2>微软 Outlook / Hotmail 账号托管</h2>
+          </div>
+          <div class="toolbar-right">
+            <button id="addOutlookModalBtn" class="btn btn-primary">➕ 添加 Outlook 账号</button>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>邮箱地址</th>
+                <th>Client ID</th>
+                <th>分组</th>
+                <th>状态</th>
+                <th>备注</th>
+                <th>添加时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="outlookTableBody">
+              <tr><td colspan="7" class="text-center py-4">暂无 Outlook 账号</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ================= 视图 4: 自动化 API 文档 ================= -->
+      <section id="view-api-doc" class="tab-view">
+        <div class="card doc-card">
+          <h2>⚡ 开放自动化 REST API 文档</h2>
+          <p class="text-muted">适合 Python、Node.js、Selenium、Playwright 等自动化注册脚本对接，秒取最新验证码！</p>
+          
+          <div class="code-block-wrapper">
+            <h3>1. 极速提取验证码 (支持通过邮箱或平台名查询)</h3>
+            <pre><code># GET /api/external/code?email=xxx@yourdomain.com
+# 或根据平台名称模糊查找：GET /api/external/code?platform=OpenAI
+curl -H "X-API-Key: YOUR_API_KEY" \
+  "https://YOUR_DOMAIN/api/external/code?email=test_user@yourdomain.com"
+
+# 响应示例：
+{
+  "success": true,
+  "code": "849201",
+  "link": "https://auth.openai.com/verify?token=xxx",
+  "subject": "Your OpenAI verification code",
+  "received_at": "2026-11-11 14:30:00"
+}</code></pre>
+          </div>
+
+          <div class="code-block-wrapper">
+            <h3>2. 自动分配临时邮箱并记录到平台台账</h3>
+            <pre><code># POST /api/external/register
+curl -X POST "https://YOUR_DOMAIN/api/external/register" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "platform_name": "Claude",
+    "password": "Password123!",
+    "category": "AI工具",
+    "remark": "美国住宅IP自动注册"
+  }'
+
+# 响应示例：
+{
+  "success": true,
+  "data": {
+    "id": 12,
+    "email": "claude_8f2a1b@yourdomain.com",
+    "platform_name": "Claude"
+  }
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 视图 5: 系统设置 ================= -->
+      <section id="view-settings" class="tab-view">
+        <div class="card settings-card">
+          <h2>系统设置与配置提示</h2>
+          <div class="setting-item">
+            <label>当前 Cloudflare 自建域名列表：</label>
+            <div id="cfDomainsDisplay" class="setting-value">加载中...</div>
+          </div>
+          <div class="setting-item">
+            <label>修改管理员登录密码：</label>
+            <div class="input-group">
+              <input type="password" id="newAdminPasswordInput" placeholder="输入新密码 (至少6位)" />
+              <button id="saveAdminPasswordBtn" class="btn btn-primary">保存修改</button>
+            </div>
+          </div>
+          <div class="setting-item">
+            <label>Cloudflare Email Routing 接入指引：</label>
+            <p class="text-muted text-sm">
+              在 Cloudflare 仪表盘 ➔ 域名 ➔ Email Routing ➔ 路由规则中，设置 Catch-all 操作为 <b>发送到 Worker (Send to Worker)</b>，目标选择本 Worker，即可将全域邮件秒推至系统！
+            </p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ================= 弹窗: 登记/编辑平台台账 ================= -->
+    <div id="vaultModal" class="modal-backdrop">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="vaultModalTitle">登记平台账号</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <form id="vaultForm">
+          <input type="hidden" id="vaultEditId" />
+          <div class="form-group">
+            <label>目标平台 *</label>
+            <input type="text" id="vaultPlatformInput" placeholder="例如：OpenAI, Cursor, Claude, GitHub..." required />
+          </div>
+          <div class="form-group">
+            <label>平台官网网址 (可选)</label>
+            <input type="url" id="vaultUrlInput" placeholder="https://..." />
+          </div>
+          <div class="form-group">
+            <div class="label-with-action">
+              <label>注册所用邮箱 *</label>
+              <button type="button" id="autoGenEmailBtn" class="btn-link">⚡ 一键生成自建域名新邮箱</button>
+            </div>
+            <input type="email" id="vaultEmailInput" placeholder="xxx@yourdomain.com 或 outlook邮箱" required />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>邮箱来源类型</label>
+              <select id="vaultEmailSourceSelect" class="select-control">
+                <option value="cf_domain">自建 Cloudflare 域名</option>
+                <option value="outlook">微软 Outlook 账号</option>
+                <option value="gptmail">公共临时邮箱</option>
+                <option value="external">外部其他邮箱</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>分类</label>
+              <select id="vaultCategorySelect" class="select-control">
+                <option value="AI工具">AI工具</option>
+                <option value="开发服务">开发服务</option>
+                <option value="社交媒体">社交媒体</option>
+                <option value="订阅平台">订阅平台</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>登录用户名/账号</label>
+              <input type="text" id="vaultUsernameInput" placeholder="可留空或同邮箱" />
+            </div>
+            <div class="form-group">
+              <label>登录密码</label>
+              <input type="text" id="vaultPasswordInput" placeholder="平台登录密码" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>2FA Secret / 恢复备用码</label>
+              <input type="text" id="vaultTotpInput" placeholder="两步验证私钥或恢复码" />
+            </div>
+            <div class="form-group">
+              <label>账号状态</label>
+              <select id="vaultStatusSelect" class="select-control">
+                <option value="active">正常活跃</option>
+                <option value="pending">待验证/待处理</option>
+                <option value="banned">已封禁</option>
+                <option value="deprecated">已废弃</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>代理节点 / 注册IP标记</label>
+            <input type="text" id="vaultProxyInput" placeholder="例如：美国洛杉矶住宅IP / 香港01" />
+          </div>
+          <div class="form-group">
+            <label>备注说明</label>
+            <textarea id="vaultRemarkInput" rows="2" placeholder="记录绑定的虚拟卡、注册时间、关键提示等..."></textarea>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary modal-close-btn">取消</button>
+            <button type="submit" class="btn btn-primary">保存台账</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ================= 弹窗: 一键查收验证码结果 ================= -->
+    <div id="codeResultModal" class="modal-backdrop">
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h3>⚡ 最新验证码提取</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="code-result-body" id="codeResultContent">
+          <div class="loading-spinner">正在查询收件箱并智能提取验证码...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 弹窗: 邮件全文查看 ================= -->
+    <div id="mailViewModal" class="modal-backdrop">
+      <div class="modal-content modal-lg">
+        <div class="modal-header">
+          <h3 id="mailModalSubject">邮件详情</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <div class="mail-modal-meta" id="mailModalMeta"></div>
+        <div class="mail-modal-body">
+          <iframe id="mailIframeSandbox" sandbox="allow-same-origin" class="mail-iframe"></iframe>
+          <div id="mailTextFallback" class="mail-text-view" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 弹窗: 添加 Outlook 账号 ================= -->
+    <div id="outlookModal" class="modal-backdrop">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>添加微软 Outlook 账号</h3>
+          <button class="modal-close">&times;</button>
+        </div>
+        <form id="outlookForm">
+          <div class="form-group">
+            <label>邮箱地址 *</label>
+            <input type="email" id="outlookEmailInput" placeholder="user@outlook.com 或 hotmail.com" required />
+          </div>
+          <div class="form-group">
+            <label>Client ID *</label>
+            <input type="text" id="outlookClientIdInput" placeholder="Azure App Client ID 或公用授权ID" required />
+          </div>
+          <div class="form-group">
+            <label>Refresh Token *</label>
+            <textarea id="outlookRefreshTokenInput" rows="3" placeholder="OAuth 授权取得的 refresh_token" required></textarea>
+          </div>
+          <div class="form-group">
+            <label>邮箱密码 (可选，用于本地台账记录)</label>
+            <input type="text" id="outlookPasswordInput" placeholder="用于记录原始登录密码" />
+          </div>
+          <div class="form-group">
+            <label>备注</label>
+            <input type="text" id="outlookRemarkInput" placeholder="备注用途" />
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary modal-close-btn">取消</button>
+            <button type="submit" class="btn btn-primary">添加账号</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 登录遮罩 (未登录时显示) -->
+    <div id="loginOverlay" class="login-overlay" style="display:none;">
+      <div class="login-card">
+        <div class="login-logo">📬</div>
+        <h2>MailHub & Vault</h2>
+        <p class="text-muted">全能邮箱矩阵与账号资产中心</p>
+        <form id="loginForm">
+          <div class="form-group">
+            <input type="password" id="loginPasswordInput" placeholder="请输入管理员密码" required autofocus />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">进入系统</button>
+          <p id="loginErrorMsg" class="error-msg" style="display:none;"></p>
+        </form>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

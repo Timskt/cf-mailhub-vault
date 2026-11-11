@@ -1,0 +1,39 @@
+name = "cf-mailhub-vault"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 绑定静态前端资源
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# 自定义访问域名 (绑定到您的 Cloudflare 域名)
+# routes = [
+#   { pattern = "vault.yourdomain.com", custom_domain = true }
+# ]
+
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "mailhub-vault-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# 定时任务：自动续期 Outlook Token、邮件自动清理
+[triggers]
+crons = ["0 */6 * * *"]
+
+[vars]
+# 自定义域名列表 (支持多个，逗号分隔，用于 Catch-all 邮箱生成)
+CF_DOMAINS = "yourdomain.com"
+# 默认邮箱前缀 (可留空)
+DEFAULT_PREFIX = "tmp"
+# 对外 API 访问密钥 (可选，用于脚本批量自动化)
+API_KEY = ""
+
+# Secrets (通过 wrangler secret put 配置):
+# ADMIN_PASSWORD = "你的管理面板访问密码"
+# COOKIE_SECRET = "随机生成用于Session签名的密钥"
+# TELEGRAM_BOT_TOKEN = "可选TG推送Token"
+# TELEGRAM_CHAT_ID = "可选TG Chat ID"

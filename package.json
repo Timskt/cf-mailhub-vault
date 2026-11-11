@@ -1,0 +1,38 @@
+{
+  "name": "cf-mailhub-vault",
+  "version": "1.0.0",
+  "description": "Cloudflare All-in-One Multi-Source Mailbox & Platform Account Vault",
+  "main": "src/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "build": "wrangler deploy --dry-run --outdir dist --minify",
+    "cf-typegen": "wrangler types"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "temp-mail",
+    "outlook",
+    "vault",
+    "account-manager"
+  ],
+  "author": "Timskt",
+  "license": "MIT",
+  "dependencies": {
+    "hono": "^4.7.2",
+    "postal-mime": "^4.1.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261021.1",
+    "typescript": "^5.8.2",
+    "wrangler": "^4.151.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  }
+}
