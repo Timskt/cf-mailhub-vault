@@ -3,6 +3,7 @@ import type { Env } from './types';
 import { authMiddleware } from './auth';
 import { handleIncomingEmail } from './email-handler';
 import { runTokenRefresh, runCleanup } from './cron';
+import { API_DOC_MD, API_DOC_JSON } from './docs';
 
 import authRoutes from './routes/auth';
 import vaultRoutes from './routes/vault';
@@ -10,6 +11,7 @@ import cfMailRoutes from './routes/cf-mails';
 import outlookRoutes from './routes/outlook';
 import externalRoutes from './routes/external';
 import settingsRoutes from './routes/settings';
+import compatRoutes from './routes/compat';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -21,24 +23,34 @@ app.onError((err, c) => {
     return c.json({
       success: false,
       error: 'DB_NOT_READY',
-      message: '数据库未初始化，请先执行迁移: wrangler d1 migrations apply mailhub-vault-db --remote'
+      message: '数据库未初始化，请先执行迁移: pnpm exec wrangler d1 execute mailhub-vault-db --file=./migrations/0001_init.sql --remote'
     }, 500);
   }
   return c.json({ success: false, error: 'SERVER_ERROR', message: msg }, 500);
 });
 
-// 1. 公开接口
+// 1. 公开端点 (健康检查与 API 文档，完全参考 tempmail.jdyun.fun /api-doc 设计)
+app.get('/healthz', (c) => c.text('ok'));
+app.get('/api-doc.md', (c) => c.text(API_DOC_MD, 200, { 'Content-Type': 'text/markdown; charset=utf-8' }));
+app.get('/api-doc.json', (c) => c.json(API_DOC_JSON));
+
+// 2. 外部与开放临时邮箱兼容接口 (无鉴权或自带鉴权)
 app.route('/api/auth', authRoutes);
 app.route('/api/external', externalRoutes);
+app.route('/api', compatRoutes); // 支持 /api/domains, /api/mailbox/*, /api/emails/*
 
-// 2. 需鉴权接口
-app.use('/api/*', authMiddleware());
+// 3. 需管理员鉴权的核心接口 (台账、自建收信管理、Outlook 矩阵、设置)
+app.use('/api/vault/*', authMiddleware());
+app.use('/api/cf-mails/*', authMiddleware());
+app.use('/api/outlook/*', authMiddleware());
+app.use('/api/settings/*', authMiddleware());
+
 app.route('/api/vault', vaultRoutes);
 app.route('/api/cf-mails', cfMailRoutes);
 app.route('/api/outlook', outlookRoutes);
 app.route('/api/settings', settingsRoutes);
 
-// 3. 静态前端资源分发 (如果 ASSETS 绑定可用)
+// 4. 静态前端资源分发 (SPA 模式)
 app.get('*', async (c) => {
   if (c.env.ASSETS) {
     return c.env.ASSETS.fetch(c.req.raw);
