@@ -1138,43 +1138,592 @@ kbd {
   box-shadow: 0 4px 20px rgba(52, 199, 89, 0.2);
 }
 
-/* 邮件 iframe 预览沙箱 */
-.mail-iframe {
-  width: 100%;
-  height: 520px;
+/* ================== 通用卡片与排版 ================== */
+.card {
+  background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  background: #ffffff;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.75rem;
+  box-shadow: var(--card-shadow);
+  transition: all 0.2s var(--ease-apple);
 }
 
-/* 登录遮罩 */
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
+.py-4 { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+.search-icon { color: var(--text-muted); font-size: 0.9rem; }
+
+/* ================== 空状态 (Apple Empty State) ================== */
+.empty-state {
+  text-align: center;
+  padding: 3.5rem 1.5rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.empty-icon {
+  font-size: 2.8rem;
+  opacity: 0.7;
+}
+
+.empty-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.empty-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  max-width: 360px;
+}
+
+/* ================== 加载旋转圈 (macOS Spinner) ================== */
+.loading-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  padding: 1rem;
+}
+
+.loading-spinner::before {
+  content: '';
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: appleSpin 0.7s linear infinite;
+}
+
+@keyframes appleSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ================== 系统设置面板 (macOS System Settings Style) ================== */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+.settings-header {
+  margin-bottom: 0.25rem;
+}
+
+.settings-header h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.3rem;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.section-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding-left: 0.5rem;
+}
+
+.settings-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.15rem 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+  gap: 1.5rem;
+}
+
+.setting-item:last-child {
+  border-bottom: none;
+}
+
+.setting-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 60%;
+}
+
+.setting-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-main);
+}
+
+.setting-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.setting-domain-pill {
+  background: rgba(0, 113, 227, 0.12);
+  color: var(--accent-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+  border: 1px solid rgba(0, 113, 227, 0.25);
+}
+
+.setting-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  color: var(--text-main);
+  background: var(--segmented-bg);
+  padding: 0.3rem 0.75rem;
+  border-radius: 8px;
+}
+
+.routing-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: rgba(52, 199, 89, 0.12);
+  color: var(--apple-green);
+  border: 1px solid rgba(52, 199, 89, 0.25);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.825rem;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--apple-green);
+  box-shadow: 0 0 8px rgba(52, 199, 89, 0.8);
+  animation: appleDotPulse 2s infinite ease-in-out;
+}
+
+@keyframes appleDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.api-key-display-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.api-key-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  background: var(--code-bg);
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.input-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.input-group input {
+  padding: 0.5rem 0.85rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  min-width: 240px;
+  transition: all 0.2s var(--ease-apple);
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: var(--focus-ring);
+}
+
+/* ================== API 文档页面 (Apple Developer Portal Style) ================== */
+.doc-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.doc-header-card {
+  padding: 1.5rem 2rem;
+}
+
+.doc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.doc-header h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.35rem;
+}
+
+.doc-actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.doc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.doc-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.endpoint-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.method {
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.method.get {
+  background: rgba(0, 113, 227, 0.12);
+  color: var(--accent-color);
+  border: 1px solid rgba(0, 113, 227, 0.25);
+}
+
+.method.post {
+  background: rgba(52, 199, 89, 0.12);
+  color: var(--apple-green);
+  border: 1px solid rgba(52, 199, 89, 0.25);
+}
+
+.endpoint-path {
+  color: var(--text-main);
+}
+
+.doc-card-desc {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.doc-card-desc code {
+  background: var(--code-bg);
+  padding: 0.15rem 0.45rem;
+  border-radius: 5px;
+  font-size: 0.825rem;
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+}
+
+/* macOS 风格代码预览窗 (Code Window) */
+.code-window {
+  background-color: var(--code-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+}
+
+.window-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.55rem 0.85rem;
+  background-color: var(--segmented-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.dot.red { background: #ff5f56; }
+.dot.yellow { background: #ffbd2e; }
+.dot.green { background: #27c93f; }
+
+.window-title {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.code-window pre {
+  margin: 0;
+  padding: 1.1rem 1.25rem;
+  overflow-x: auto;
+}
+
+.code-window code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--text-main);
+  line-height: 1.55;
+}
+
+/* ================== 收信箱与邮件详情 ================== */
+.mail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 380px;
+}
+
+.recipient-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.sidebar-footer {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.mail-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.mail-iframe-container {
+  width: 100%;
+  height: 540px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.mail-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #ffffff;
+}
+
+.mail-modal-meta {
+  background: var(--segmented-bg);
+  border-radius: 10px;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1rem;
+  font-size: 0.825rem;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mail-modal-meta b {
+  color: var(--text-main);
+}
+
+.mail-text-view {
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1.25rem;
+  background: var(--code-bg);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  max-height: 540px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+  color: var(--text-main);
+  line-height: 1.6;
+}
+
+/* ================== 苹果原生登录界面 (macOS Sequoia Login) ================== */
 .login-overlay {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background: var(--bg-primary);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(35px) saturate(180%);
+  -webkit-backdrop-filter: blur(35px) saturate(180%);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: 999;
+  animation: appleBackdropFade 0.25s var(--ease-apple);
 }
 
 .login-card {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  padding: 2.75rem;
+  border-radius: 22px;
+  padding: 3rem 2.5rem 2.5rem 2.5rem;
   width: 90%;
-  max-width: 400px;
+  max-width: 420px;
   text-align: center;
   box-shadow: var(--modal-shadow);
+  animation: appleModalPop 0.25s var(--ease-apple);
 }
 
-.login-logo { font-size: 3.2rem; margin-bottom: 0.75rem; }
-.login-card h2 { font-size: 1.35rem; font-weight: 700; margin-bottom: 0.25rem; }
-.error-msg { color: var(--apple-red); font-size: 0.825rem; margin-top: 0.6rem; }
+.login-badge-icon {
+  font-size: 3.6rem;
+  margin-bottom: 0.75rem;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.15));
+}
+
+.login-card h2 {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-main);
+  margin-bottom: 0.3rem;
+}
+
+.login-subtitle {
+  font-size: 0.825rem;
+  color: var(--text-muted);
+  margin-bottom: 1.75rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: left;
+  margin-bottom: 0.4rem;
+}
+
+.login-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.login-input-icon {
+  position: absolute;
+  left: 0.95rem;
+  font-size: 1rem;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.login-input-wrapper input {
+  width: 100%;
+  padding: 0.65rem 1rem 0.65rem 2.5rem;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  border-radius: 12px;
+  font-size: 0.95rem;
+  transition: all 0.2s var(--ease-apple);
+}
+
+.login-input-wrapper input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: var(--focus-ring);
+}
+
+.btn-lg {
+  padding: 0.72rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: 12px;
+}
+
+.login-error-alert {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--apple-red);
+  border: 1px solid rgba(255, 59, 48, 0.3);
+  padding: 0.6rem 0.85rem;
+  border-radius: 9px;
+  font-size: 0.825rem;
+  font-weight: 600;
+  animation: appleShake 0.3s var(--ease-apple);
+}
+
+@keyframes appleShake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+.login-tip {
+  margin-top: 0.6rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.login-tip code {
+  background: var(--segmented-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+.login-tip .sub-tip {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
 
 /* 响应式适配 */
 @media (max-width: 960px) {

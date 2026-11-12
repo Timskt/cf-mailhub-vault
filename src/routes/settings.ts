@@ -14,7 +14,9 @@ app.get('/', async (c) => {
   }
 
   // 附带环境变量中的配置提示
-  map['env_cf_domains'] = c.env.CF_DOMAINS || '';
+  map['env_cf_domains'] = c.env.CF_DOMAINS || '439949.xyz';
+  map['api_key'] = c.env.API_KEY || 'cf_mailhub_api_key_8888';
+  map['default_prefix'] = c.env.DEFAULT_PREFIX || 'tmp';
   map['has_admin_password_env'] = Boolean(c.env.ADMIN_PASSWORD) ? 'true' : 'false';
   map['has_api_key'] = Boolean(c.env.API_KEY) ? 'true' : 'false';
 

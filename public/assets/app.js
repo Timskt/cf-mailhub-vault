@@ -83,7 +83,7 @@
     mailViewModal: document.getElementById('mailViewModal'),
     mailModalSubject: document.getElementById('mailModalSubject'),
     mailModalMeta: document.getElementById('mailModalMeta'),
-    mailIframeSandbox: document.getElementById('mailIframeSandbox'),
+    mailIframeContainer: document.getElementById('mailIframeContainer'),
     mailTextFallback: document.getElementById('mailTextFallback'),
 
     // Outlook 元素
@@ -94,6 +94,10 @@
 
     // 设置元素
     cfDomainsDisplay: document.getElementById('cfDomainsDisplay'),
+    defaultPrefixDisplay: document.getElementById('defaultPrefixDisplay'),
+    apiKeyDisplay: document.getElementById('apiKeyDisplay'),
+    copyApiKeyBtn: document.getElementById('copyApiKeyBtn'),
+    loginSubmitBtn: document.getElementById('loginSubmitBtn'),
     newAdminPasswordInput: document.getElementById('newAdminPasswordInput'),
     saveAdminPasswordBtn: document.getElementById('saveAdminPasswordBtn')
   };
@@ -107,8 +111,12 @@
     }
     const res = await fetch(path, options);
     if (res.status === 401) {
+      if (path === '/api/auth/login') {
+        const errData = await res.json().catch(() => ({}));
+        return { success: false, message: errData.message || '密码错误，请重新输入（默认: Admin8888Password）' };
+      }
       showLogin(true);
-      throw new Error('UNAUTHORIZED');
+      return { success: false, error: 'UNAUTHORIZED' };
     }
     const data = await res.json().catch(() => ({}));
     return data;
@@ -690,11 +698,17 @@
     `;
 
     if (m.html_content) {
-      dom.mailIframeSandbox.style.display = 'block';
+      dom.mailIframeContainer.innerHTML = '';
+      const iframe = document.createElement('iframe');
+      iframe.className = 'mail-iframe';
+      iframe.sandbox = 'allow-popups';
+      iframe.srcdoc = m.html_content;
+      dom.mailIframeContainer.appendChild(iframe);
+      dom.mailIframeContainer.style.display = 'block';
       dom.mailTextFallback.style.display = 'none';
-      dom.mailIframeSandbox.srcdoc = m.html_content;
     } else {
-      dom.mailIframeSandbox.style.display = 'none';
+      dom.mailIframeContainer.innerHTML = '';
+      dom.mailIframeContainer.style.display = 'none';
       dom.mailTextFallback.style.display = 'block';
       dom.mailTextFallback.textContent = m.text_content || '(邮件内容为空)';
     }
@@ -778,17 +792,36 @@
       const res = await api('/api/settings');
       if (res.success && res.data) {
         state.systemSettings = res.data;
-        dom.cfDomainsDisplay.textContent = res.data.env_cf_domains || '439949.xyz';
+        if (dom.cfDomainsDisplay) dom.cfDomainsDisplay.textContent = res.data.env_cf_domains || '439949.xyz';
+        if (dom.defaultPrefixDisplay) dom.defaultPrefixDisplay.textContent = res.data.default_prefix || 'tmp';
+        if (dom.apiKeyDisplay) dom.apiKeyDisplay.textContent = res.data.api_key || 'cf_mailhub_api_key_8888';
       }
     } catch (e) {}
   }
+
+  if (dom.copyApiKeyBtn) {
+    dom.copyApiKeyBtn.addEventListener('click', () => {
+      copyText(dom.apiKeyDisplay ? dom.apiKeyDisplay.textContent : 'cf_mailhub_api_key_8888', 'API Key');
+    });
+  }
+
+  // 复制代码片段按钮
+  document.querySelectorAll('.copy-snippet-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const snippetId = btn.dataset.snippet;
+      const el = document.getElementById(snippetId);
+      if (el) {
+        copyText(el.innerText || el.textContent, 'cURL 示例');
+      }
+    });
+  });
 
   dom.saveAdminPasswordBtn.addEventListener('click', async () => {
     const pwd = dom.newAdminPasswordInput.value.trim();
     if (!pwd || pwd.length < 6) return alert('密码至少 6 位');
     const res = await api('/api/settings/password', { method: 'POST', body: { new_password: pwd } });
     if (res.success) {
-      showToast('密码修改成功');
+      showToast('密码修改成功，下次登录请使用新密码');
       dom.newAdminPasswordInput.value = '';
     } else {
       alert(res.message || '修改失败');
@@ -813,6 +846,7 @@
   document.querySelectorAll('.modal-close, .modal-close-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('show'));
+      if (dom.mailIframeContainer) dom.mailIframeContainer.innerHTML = '';
     });
   });
 
@@ -842,18 +876,36 @@
   dom.mailSearchInput.addEventListener('input', debounce(loadCfMails));
   dom.refreshMailsBtn.addEventListener('click', loadCfMails);
 
-  // 登录表单
+  // 登录表单处理
   dom.loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    dom.loginErrorMsg.style.display = 'none';
+    if (dom.loginErrorMsg) dom.loginErrorMsg.style.display = 'none';
+    if (dom.loginSubmitBtn) {
+      dom.loginSubmitBtn.disabled = true;
+      dom.loginSubmitBtn.textContent = '正在进入...';
+    }
     const pwd = dom.loginPasswordInput.value;
     const res = await api('/api/auth/login', { method: 'POST', body: { password: pwd } });
+    if (dom.loginSubmitBtn) {
+      dom.loginSubmitBtn.disabled = false;
+      dom.loginSubmitBtn.textContent = '进入控制台';
+    }
+
     if (res.success) {
       showLogin(false);
+      dom.loginPasswordInput.value = '';
       initApp();
     } else {
-      dom.loginErrorMsg.textContent = res.message || '密码错误';
-      dom.loginErrorMsg.style.display = 'block';
+      if (dom.loginErrorMsg) {
+        dom.loginErrorMsg.textContent = res.message || '密码错误，请重新输入（默认: Admin8888Password）';
+        dom.loginErrorMsg.style.display = 'block';
+      }
+      const card = document.querySelector('.login-card');
+      if (card) {
+        card.style.animation = 'none';
+        void card.offsetWidth;
+        card.style.animation = 'appleShake 0.35s cubic-bezier(0.16, 1, 0.3, 1)';
+      }
     }
   });
 
@@ -868,15 +920,23 @@
     b.addEventListener('click', () => switchTab(b.dataset.tab));
   });
 
-  // 启动应用
+  // 启动应用：平滑鉴权，未登录直接停在登录界面，不发送 401 失败请求
   async function initApp() {
     initTheme();
     try {
+      const meRes = await fetch('/api/auth/me').then(r => r.json()).catch(() => ({}));
+      if (!meRes || !meRes.authenticated) {
+        showLogin(true);
+        return;
+      }
+      showLogin(false);
       await loadStats();
       await loadSettings();
       await loadPlatformSummary();
       switchTab('vault');
-    } catch (e) {}
+    } catch (e) {
+      showLogin(true);
+    }
   }
 
   initApp();

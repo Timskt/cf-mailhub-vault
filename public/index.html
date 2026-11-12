@@ -213,39 +213,64 @@
 
       <!-- ================= 视图 4: 自动化 API 文档 ================= -->
       <section id="view-api-doc" class="tab-view">
-        <div class="card doc-card">
-          <div class="doc-header">
-            <div>
-              <h2>⚡ 开放自动化 REST API 文档</h2>
-              <p class="text-muted">专为 Python、Node.js、Selenium、Playwright 自动化脚本打造，提供直连提取验证码接口！</p>
-            </div>
-            <div class="doc-actions">
-              <a href="/api-doc.md" target="_blank" class="btn btn-secondary">📄 查看原始 Markdown</a>
-              <a href="/api-doc.json" target="_blank" class="btn btn-secondary">📐 查看 JSON 契约</a>
+        <div class="doc-page">
+          <div class="card doc-header-card">
+            <div class="doc-header">
+              <div>
+                <h2>⚡ 自动化脚本 RESTful API 文档</h2>
+                <p class="text-muted">专为 Python、Node.js、Selenium、Playwright 自动化脚本打造，提供直连提取验证码接口！</p>
+              </div>
+              <div class="doc-actions">
+                <a href="/api-doc.md" target="_blank" class="btn btn-secondary">📄 查看原始 Markdown</a>
+                <a href="/api-doc.json" target="_blank" class="btn btn-secondary">📐 查看 JSON 契约</a>
+              </div>
             </div>
           </div>
-          
-          <div class="code-block-wrapper">
-            <h3>1. 极速提取验证码 (支持通过邮箱或平台名查询)</h3>
-            <pre><code># GET /api/external/code?email=xxx@439949.xyz
-# 或根据平台名称模糊查找：GET /api/external/code?platform=OpenAI
-curl -H "X-API-Key: cf_mailhub_api_key_8888" \
-  "https://vault.439949.xyz/api/external/code?platform=OpenAI"
 
-# 响应示例：
-{
+          <div class="doc-section">
+            <div class="card doc-card">
+              <div class="doc-card-header">
+                <div class="endpoint-badge"><span class="method get">GET</span> <span class="endpoint-path">/api/external/code</span></div>
+                <button type="button" class="btn btn-sm btn-secondary copy-snippet-btn" data-snippet="snippet-curl-code">📋 复制 cURL</button>
+              </div>
+              <p class="doc-card-desc">极速提取最新验证码，支持传入邮箱地址 <code>?email=xxx</code> 或平台名称 <code>?platform=OpenAI</code> 自动模糊匹配。</p>
+              <div class="code-window">
+                <div class="window-bar">
+                  <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                  <span class="window-title">cURL 示例</span>
+                </div>
+                <pre><code id="snippet-curl-code">curl -H "X-API-Key: cf_mailhub_api_key_8888" \
+  "https://vault.439949.xyz/api/external/code?platform=OpenAI"</code></pre>
+              </div>
+              <div class="code-window">
+                <div class="window-bar">
+                  <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                  <span class="window-title">响应 JSON 格式</span>
+                </div>
+                <pre><code>{
   "success": true,
   "code": "849201",
   "link": "https://auth.openai.com/verify?token=xxx",
   "subject": "Your OpenAI verification code",
   "received_at": "2026-11-12 09:30:00"
 }</code></pre>
+              </div>
+            </div>
           </div>
 
-          <div class="code-block-wrapper">
-            <h3>2. 自动分配临时邮箱并记录到平台台账</h3>
-            <pre><code># POST /api/external/register
-curl -X POST "https://vault.439949.xyz/api/external/register" \
+          <div class="doc-section">
+            <div class="card doc-card">
+              <div class="doc-card-header">
+                <div class="endpoint-badge"><span class="method post">POST</span> <span class="endpoint-path">/api/external/register</span></div>
+                <button type="button" class="btn btn-sm btn-secondary copy-snippet-btn" data-snippet="snippet-curl-reg">📋 复制 cURL</button>
+              </div>
+              <p class="doc-card-desc">自动分配自建域名临时邮箱并原子化记录到平台资产台账，避免多处手动复制。</p>
+              <div class="code-window">
+                <div class="window-bar">
+                  <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                  <span class="window-title">cURL 示例</span>
+                </div>
+                <pre><code id="snippet-curl-reg">curl -X POST "https://vault.439949.xyz/api/external/register" \
   -H "X-API-Key: cf_mailhub_api_key_8888" \
   -H "Content-Type: application/json" \
   -d '{
@@ -253,10 +278,14 @@ curl -X POST "https://vault.439949.xyz/api/external/register" \
     "password": "Password123!",
     "category": "AI工具",
     "remark": "美国住宅IP自动注册"
-  }'
-
-# 响应示例：
-{
+  }'</code></pre>
+              </div>
+              <div class="code-window">
+                <div class="window-bar">
+                  <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+                  <span class="window-title">响应 JSON 格式</span>
+                </div>
+                <pre><code>{
   "success": true,
   "data": {
     "id": 12,
@@ -264,29 +293,80 @@ curl -X POST "https://vault.439949.xyz/api/external/register" \
     "platform_name": "Claude"
   }
 }</code></pre>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- ================= 视图 5: 系统设置 ================= -->
       <section id="view-settings" class="tab-view">
-        <div class="card settings-card">
-          <h2>系统设置与配置提示</h2>
-          <div class="setting-item">
-            <label>当前 Cloudflare 自建域名列表：</label>
-            <div id="cfDomainsDisplay" class="setting-value">439949.xyz</div>
+        <div class="settings-page">
+          <div class="settings-header">
+            <h2>⚙️ 系统设置与服务配置</h2>
+            <p class="text-muted">管理自建邮件域名路由、自动化 API 密钥与管理员访问凭证</p>
           </div>
-          <div class="setting-item">
-            <label>修改管理员登录密码：</label>
-            <div class="input-group">
-              <input type="password" id="newAdminPasswordInput" placeholder="输入新密码 (至少6位)" />
-              <button id="saveAdminPasswordBtn" class="btn btn-primary">保存修改</button>
+
+          <div class="settings-section">
+            <h3 class="section-title">☁️ CLOUDFLARE 邮件基础设施</h3>
+            <div class="card settings-card">
+              <div class="setting-item">
+                <div class="setting-item-info">
+                  <div class="setting-title">Catch-All 邮件路由状态</div>
+                  <div class="setting-desc">所有发往本域名的任意邮箱（如 anything@439949.xyz）均自动投递至 Worker 解析</div>
+                </div>
+                <div class="routing-status-badge">
+                  <span class="status-dot green"></span> 运行中 (Email Routing Active)
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-item-info">
+                  <div class="setting-title">当前自建域名 (Cloudflare Zones)</div>
+                  <div class="setting-desc">已绑定的企业邮件域名，支持前缀无缝分发</div>
+                </div>
+                <div id="cfDomainsDisplay" class="setting-domain-pill">439949.xyz</div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-item-info">
+                  <div class="setting-title">临时邮箱默认前缀</div>
+                  <div class="setting-desc">一键生成邮箱时的前缀规则</div>
+                </div>
+                <div id="defaultPrefixDisplay" class="setting-value">tmp</div>
+              </div>
             </div>
           </div>
-          <div class="setting-item">
-            <label>Cloudflare Email Routing 接入状态：</label>
-            <div class="routing-status-badge">
-              <span class="status-dot green"></span> 已在 <b>439949.xyz</b> 开启 Catch-All 邮件路由直通 Worker
+
+          <div class="settings-section">
+            <h3 class="section-title">⚡ 自动化 API 访问密钥 (API KEY)</h3>
+            <div class="card settings-card">
+              <div class="setting-item">
+                <div class="setting-item-info">
+                  <div class="setting-title">全局 API 凭证</div>
+                  <div class="setting-desc">在 Python/Node.js 自动化脚本请求头携带 <code>X-API-Key</code> 或 <code>Authorization: Bearer &lt;key&gt;</code></div>
+                </div>
+                <div class="api-key-display-group">
+                  <code id="apiKeyDisplay" class="api-key-code">cf_mailhub_api_key_8888</code>
+                  <button type="button" id="copyApiKeyBtn" class="btn btn-sm btn-secondary">📋 复制</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h3 class="section-title">🔒 安全与管理员登录</h3>
+            <div class="card settings-card">
+              <div class="setting-item">
+                <div class="setting-item-info">
+                  <div class="setting-title">修改管理员登录密码</div>
+                  <div class="setting-desc">修改后将即刻保存在 Cloudflare D1 分布式数据库中，重启 Worker 依然持久生效</div>
+                </div>
+                <div class="input-group">
+                  <input type="password" id="newAdminPasswordInput" placeholder="输入新密码 (至少6位)" />
+                  <button id="saveAdminPasswordBtn" class="btn btn-primary">保存修改</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -416,7 +496,7 @@ curl -X POST "https://vault.439949.xyz/api/external/register" \
         </div>
         <div class="mail-modal-meta" id="mailModalMeta"></div>
         <div class="mail-modal-body">
-          <iframe id="mailIframeSandbox" sandbox="allow-same-origin" class="mail-iframe"></iframe>
+          <div id="mailIframeContainer" class="mail-iframe-container"></div>
           <div id="mailTextFallback" class="mail-text-view" style="display:none;"></div>
         </div>
       </div>
@@ -458,18 +538,26 @@ curl -X POST "https://vault.439949.xyz/api/external/register" \
       </div>
     </div>
 
-    <!-- 登录遮罩 (未登录时显示) -->
+    <!-- 苹果风格全局登录遮罩 (未登录时优雅呈现) -->
     <div id="loginOverlay" class="login-overlay" style="display:none;">
       <div class="login-card">
-        <div class="login-logo">📬</div>
+        <div class="login-badge-icon">📬</div>
         <h2>MailHub & Vault</h2>
-        <p class="text-muted">全能邮箱矩阵与账号资产中心</p>
-        <form id="loginForm">
+        <p class="login-subtitle">全能邮箱矩阵与账号资产中心</p>
+        <form id="loginForm" class="login-form">
           <div class="form-group">
-            <input type="password" id="loginPasswordInput" placeholder="请输入管理员密码" required autofocus />
+            <label class="login-label">管理员登录密码</label>
+            <div class="login-input-wrapper">
+              <span class="login-input-icon">🔑</span>
+              <input type="password" id="loginPasswordInput" placeholder="请输入密码 (默认: Admin8888Password)" required autocomplete="current-password" autofocus />
+            </div>
           </div>
-          <button type="submit" class="btn btn-primary btn-block">进入系统</button>
-          <p id="loginErrorMsg" class="error-msg" style="display:none;"></p>
+          <button type="submit" id="loginSubmitBtn" class="btn btn-primary btn-block btn-lg">进入控制台</button>
+          <div id="loginErrorMsg" class="login-error-alert" style="display:none;"></div>
+          <div class="login-tip">
+            <span>💡 首次登录初始密码：<code>Admin8888Password</code></span>
+            <span class="sub-tip">可在登录后右上角「设置」中随时自定义修改</span>
+          </div>
         </form>
       </div>
     </div>

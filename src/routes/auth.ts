@@ -1,39 +1,34 @@
 import { Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { Env } from '../types';
-import { createSessionToken, setSessionCookie, clearSessionCookie, hashPassword } from '../auth';
+import { createSessionToken, verifySessionToken, setSessionCookie, clearSessionCookie, hashPassword } from '../auth';
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.post('/login', async (c) => {
-  const { password } = await c.req.json();
+  const { password } = await c.req.json().catch(() => ({}));
   if (!password) {
     return c.json({ success: false, message: '请输入管理员密码' }, 400);
   }
 
-  const envPwd = c.env.ADMIN_PASSWORD;
   let isValid = false;
 
-  if (envPwd) {
-    isValid = password === envPwd;
+  // 1. 优先比对数据库中自定义设置的密码
+  const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_password'").first<{ value: string }>();
+  if (row && row.value) {
+    const hashed = await hashPassword(password);
+    isValid = (hashed === row.value || password === row.value);
   } else {
-    // 检查数据库中设置的密码
-    const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_password'").first<{ value: string }>();
-    if (row && row.value) {
-      const hashed = await hashPassword(password);
-      isValid = hashed === row.value || password === row.value;
-    } else {
-      // 首次使用，自动初始化此密码
-      const hashed = await hashPassword(password);
-      await c.env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_password', ?)").bind(hashed).run();
-      isValid = true;
-    }
+    // 2. 数据库未自定义，比对环境变量 ADMIN_PASSWORD (默认兜底: Admin8888Password)
+    const envPwd = c.env.ADMIN_PASSWORD || 'Admin8888Password';
+    isValid = (password === envPwd);
   }
 
   if (!isValid) {
-    return c.json({ success: false, message: '密码错误' }, 401);
+    return c.json({ success: false, message: '密码错误，请重新输入（默认密码: Admin8888Password）' }, 401);
   }
 
-  const cookieSecret = c.env.COOKIE_SECRET || envPwd || 'default-mailhub-secret';
+  const cookieSecret = c.env.COOKIE_SECRET || c.env.ADMIN_PASSWORD || 'default-mailhub-secret';
   const token = await createSessionToken('admin', cookieSecret);
   setSessionCookie(c, token);
 
@@ -46,7 +41,12 @@ app.post('/logout', (c) => {
 });
 
 app.get('/me', async (c) => {
-  return c.json({ success: true, data: { user: 'admin' } });
+  const token = getCookie(c, 'mailhub_session');
+  const cookieSecret = c.env.COOKIE_SECRET || c.env.ADMIN_PASSWORD || 'default-mailhub-secret';
+  if (token && await verifySessionToken(token, cookieSecret)) {
+    return c.json({ success: true, authenticated: true, user: 'admin' });
+  }
+  return c.json({ success: true, authenticated: false });
 });
 
 export default app;
