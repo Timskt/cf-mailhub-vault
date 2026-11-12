@@ -30,15 +30,25 @@ app.get('/', async (c) => {
   return c.json({ success: true, data: results || [] });
 });
 
-// 2. 获取所有活跃收件地址及其邮件数 (便于在左侧选择具体邮箱过滤)
+// 2. 获取所有活跃收件地址及其邮件数 (支持按地址搜索与未读统计)
 app.get('/recipients', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT recipient, count(*) as mail_count, max(is_protected) as is_protected, max(created_at) as last_received_at
-     FROM cf_inbox_mails
-     GROUP BY recipient
-     ORDER BY last_received_at DESC`
-  ).all();
+  const search = c.req.query('q')?.trim().toLowerCase() || '';
+  let sql = `
+    SELECT recipient, 
+           count(*) as mail_count, 
+           count(CASE WHEN is_read = 0 THEN 1 END) as unread_count,
+           max(is_protected) as is_protected, 
+           max(created_at) as last_received_at
+    FROM cf_inbox_mails
+  `;
+  const params: any[] = [];
+  if (search) {
+    sql += ' WHERE LOWER(recipient) LIKE ?';
+    params.push(`%${search}%`);
+  }
+  sql += ' GROUP BY recipient ORDER BY unread_count DESC, last_received_at DESC';
 
+  const { results } = await c.env.DB.prepare(sql).bind(...params).all();
   return c.json({ success: true, data: results || [] });
 });
 

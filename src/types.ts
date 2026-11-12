@@ -25,6 +25,7 @@ export interface PlatformAccount {
   remark: string;
   last_code: string;
   last_code_at: string;
+  is_pinned?: number;
   created_at: string;
   updated_at: string;
 }

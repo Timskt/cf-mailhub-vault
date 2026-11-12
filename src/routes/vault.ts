@@ -10,6 +10,8 @@ app.get('/', async (c) => {
   const search = c.req.query('q')?.trim() || '';
   const category = c.req.query('category')?.trim() || '';
   const status = c.req.query('status')?.trim() || '';
+  const platform = c.req.query('platform')?.trim() || '';
+  const hasCode = c.req.query('has_code') === 'true';
 
   let sql = 'SELECT * FROM platform_vault WHERE 1=1';
   const params: any[] = [];
@@ -22,16 +24,44 @@ app.get('/', async (c) => {
     sql += ' AND status = ?';
     params.push(status);
   }
+  if (platform) {
+    sql += ' AND LOWER(platform_name) = ?';
+    params.push(platform.toLowerCase());
+  }
+  if (hasCode) {
+    sql += " AND last_code != ''";
+  }
   if (search) {
-    sql += ' AND (platform_name LIKE ? OR account_email LIKE ? OR username LIKE ? OR remark LIKE ?)';
+    sql += ' AND (platform_name LIKE ? OR account_email LIKE ? OR username LIKE ? OR remark LIKE ? OR last_code LIKE ?)';
     const wild = `%${search}%`;
-    params.push(wild, wild, wild, wild);
+    params.push(wild, wild, wild, wild, wild);
   }
 
-  sql += ' ORDER BY updated_at DESC, id DESC';
+  sql += ' ORDER BY is_pinned DESC, updated_at DESC, id DESC';
 
   const { results } = await c.env.DB.prepare(sql).bind(...params).all<PlatformAccount>();
   return c.json({ success: true, data: results || [] });
+});
+
+// 1.1 获取所有平台聚合信息及数量 (用于顶部快速切换胶囊)
+app.get('/platforms', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT platform_name, count(*) as count
+     FROM platform_vault
+     GROUP BY LOWER(platform_name)
+     ORDER BY count DESC LIMIT 20`
+  ).all();
+
+  return c.json({ success: true, data: results || [] });
+});
+
+// 1.2 切换置顶状态
+app.post('/:id/pin', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare(
+    'UPDATE platform_vault SET is_pinned = CASE WHEN is_pinned = 1 THEN 0 ELSE 1 END WHERE id = ?'
+  ).bind(id).run();
+  return c.json({ success: true, message: '置顶状态已更新' });
 });
 
 // 2. 获取统计数据 (用于仪表盘顶部看板)

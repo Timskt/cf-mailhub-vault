@@ -9,22 +9,34 @@
 </head>
 <body class="dark-theme">
   <div id="app">
-    <!-- 顶部导航栏 -->
+    <!-- 顶部统一导航栏 -->
     <header class="navbar">
-      <div class="nav-brand">
-        <span class="brand-logo">📬</span>
-        <div class="brand-text">
-          <h1>MailHub & Vault</h1>
-          <span class="sub-title">全能邮箱矩阵与账号资产中心</span>
+      <div class="nav-left">
+        <div class="nav-brand">
+          <span class="brand-logo">📬</span>
+          <div class="brand-text">
+            <h1>MailHub & Vault</h1>
+            <span class="sub-title">全能邮箱矩阵与账号资产中心</span>
+          </div>
+        </div>
+        <nav class="nav-tabs">
+          <button class="nav-tab active" data-tab="vault">📋 平台台账</button>
+          <button class="nav-tab" data-tab="cf-mails">📬 自建收信箱 <span id="cfMailCountBadge" class="badge-count">0</span></button>
+          <button class="nav-tab" data-tab="outlook">🏢 Outlook 矩阵</button>
+          <button class="nav-tab" data-tab="api-doc">⚡ 自动化 API</button>
+          <button class="nav-tab" data-tab="settings">⚙️ 设置</button>
+        </nav>
+      </div>
+
+      <!-- 全局快捷搜索栏 (触发 Cmd+K) -->
+      <div class="nav-center">
+        <div class="quick-spotlight-trigger" id="globalSpotlightTrigger">
+          <span class="search-icon">🔍</span>
+          <span class="search-placeholder">全局秒搜平台、邮箱、验证码...</span>
+          <span class="kbd-shortcut"><kbd>⌘</kbd><kbd>K</kbd></span>
         </div>
       </div>
-      <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="vault">📋 平台台账</button>
-        <button class="nav-tab" data-tab="cf-mails">📬 自建收信箱 <span id="cfMailCountBadge" class="badge-count">0</span></button>
-        <button class="nav-tab" data-tab="outlook">🏢 Outlook 矩阵</button>
-        <button class="nav-tab" data-tab="api-doc">⚡ 自动化 API</button>
-        <button class="nav-tab" data-tab="settings">⚙️ 设置</button>
-      </nav>
+
       <div class="nav-actions">
         <button id="themeToggleBtn" class="btn-icon" title="切换深浅主题">🌓</button>
         <button id="logoutBtn" class="btn-sm btn-outline">退出</button>
@@ -36,7 +48,7 @@
 
       <!-- ================= 视图 1: 平台账号台账 ================= -->
       <section id="view-vault" class="tab-view active">
-        <!-- 看板卡片 -->
+        <!-- 统计指标看板 -->
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-icon bg-blue">🏢</div>
@@ -68,11 +80,20 @@
           </div>
         </div>
 
+        <!-- 平台快速过滤胶囊条 (海量邮箱的核心体验优化) -->
+        <div class="platform-chips-wrapper">
+          <span class="chips-title">平台快捷筛选：</span>
+          <div class="platform-chips-list" id="platformChipsList">
+            <button class="chip-item active" data-platform="">全部平台 (0)</button>
+          </div>
+        </div>
+
         <!-- 过滤工具栏 -->
         <div class="toolbar">
           <div class="toolbar-left">
             <div class="search-box">
-              <input type="text" id="vaultSearchInput" placeholder="搜索平台、邮箱、用户名或备注..." />
+              <span class="input-icon">🔍</span>
+              <input type="text" id="vaultSearchInput" placeholder="输入平台、邮箱前缀、备注即搜..." />
             </div>
             <select id="vaultCategoryFilter" class="select-control">
               <option value="">全部分类</option>
@@ -89,6 +110,7 @@
               <option value="banned">已封禁</option>
               <option value="deprecated">已废弃</option>
             </select>
+            <button id="toggleHasCodeBtn" class="btn btn-filter" data-active="false">⚡ 仅看有验证码</button>
           </div>
           <div class="toolbar-right">
             <button id="openNewVaultModalBtn" class="btn btn-primary">➕ 登记平台账号</button>
@@ -101,18 +123,19 @@
           <table class="data-table">
             <thead>
               <tr>
+                <th width="40">⭐</th>
                 <th>平台名称</th>
                 <th>绑定邮箱</th>
-                <th>用户名</th>
+                <th>登录用户名</th>
                 <th>密码</th>
                 <th>分类</th>
                 <th>状态</th>
                 <th>⚡ 最新验证码</th>
-                <th>操作</th>
+                <th width="140">操作</th>
               </tr>
             </thead>
             <tbody id="vaultTableBody">
-              <tr><td colspan="8" class="text-center py-4">正在加载台账数据...</td></tr>
+              <tr><td colspan="9" class="text-center py-4 text-muted">正在加载台账数据...</td></tr>
             </tbody>
           </table>
         </div>
@@ -121,15 +144,19 @@
       <!-- ================= 视图 2: 自建域名收信箱 ================= -->
       <section id="view-cf-mails" class="tab-view">
         <div class="inbox-layout">
-          <!-- 左侧收件地址过滤 -->
+          <!-- 左侧收件地址过滤 (海量邮箱收件箱优化) -->
           <div class="inbox-sidebar">
             <div class="sidebar-header">
-              <h3>收件地址</h3>
+              <h3>收件地址 (<span id="recipientTotalCount">0</span>)</h3>
               <button id="refreshMailsBtn" class="btn-icon" title="刷新收件箱">🔄</button>
+            </div>
+            <!-- 地址快速搜索框 -->
+            <div class="sidebar-search">
+              <input type="text" id="recipientSearchInput" placeholder="过滤邮箱地址..." />
             </div>
             <div class="recipient-filter-list" id="recipientList">
               <div class="recipient-item active" data-email="">
-                <span>全部收件箱</span>
+                <span class="recipient-name">全部收件箱</span>
                 <span class="badge" id="totalRecipientCount">0</span>
               </div>
             </div>
@@ -142,8 +169,10 @@
           <div class="inbox-main">
             <div class="toolbar">
               <div class="search-box">
-                <input type="text" id="mailSearchInput" placeholder="按发件人、主题、验证码搜索邮件..." />
+                <span class="input-icon">🔍</span>
+                <input type="text" id="mailSearchInput" placeholder="按发件人、主题、验证码关键词搜索邮件..." />
               </div>
+              <div class="current-filter-tip" id="currentRecipientDisplay">当前查看: 全部收件箱</div>
             </div>
             <div class="mail-list" id="mailListContainer">
               <div class="empty-state">暂无邮件</div>
@@ -185,15 +214,23 @@
       <!-- ================= 视图 4: 自动化 API 文档 ================= -->
       <section id="view-api-doc" class="tab-view">
         <div class="card doc-card">
-          <h2>⚡ 开放自动化 REST API 文档</h2>
-          <p class="text-muted">适合 Python、Node.js、Selenium、Playwright 等自动化注册脚本对接，秒取最新验证码！</p>
+          <div class="doc-header">
+            <div>
+              <h2>⚡ 开放自动化 REST API 文档</h2>
+              <p class="text-muted">专为 Python、Node.js、Selenium、Playwright 自动化脚本打造，提供直连提取验证码接口！</p>
+            </div>
+            <div class="doc-actions">
+              <a href="/api-doc.md" target="_blank" class="btn btn-secondary">📄 查看原始 Markdown</a>
+              <a href="/api-doc.json" target="_blank" class="btn btn-secondary">📐 查看 JSON 契约</a>
+            </div>
+          </div>
           
           <div class="code-block-wrapper">
             <h3>1. 极速提取验证码 (支持通过邮箱或平台名查询)</h3>
-            <pre><code># GET /api/external/code?email=xxx@yourdomain.com
+            <pre><code># GET /api/external/code?email=xxx@439949.xyz
 # 或根据平台名称模糊查找：GET /api/external/code?platform=OpenAI
-curl -H "X-API-Key: YOUR_API_KEY" \
-  "https://YOUR_DOMAIN/api/external/code?email=test_user@yourdomain.com"
+curl -H "X-API-Key: cf_mailhub_api_key_8888" \
+  "https://vault.439949.xyz/api/external/code?platform=OpenAI"
 
 # 响应示例：
 {
@@ -201,15 +238,15 @@ curl -H "X-API-Key: YOUR_API_KEY" \
   "code": "849201",
   "link": "https://auth.openai.com/verify?token=xxx",
   "subject": "Your OpenAI verification code",
-  "received_at": "2026-11-11 14:30:00"
+  "received_at": "2026-11-12 09:30:00"
 }</code></pre>
           </div>
 
           <div class="code-block-wrapper">
             <h3>2. 自动分配临时邮箱并记录到平台台账</h3>
             <pre><code># POST /api/external/register
-curl -X POST "https://YOUR_DOMAIN/api/external/register" \
-  -H "X-API-Key: YOUR_API_KEY" \
+curl -X POST "https://vault.439949.xyz/api/external/register" \
+  -H "X-API-Key: cf_mailhub_api_key_8888" \
   -H "Content-Type: application/json" \
   -d '{
     "platform_name": "Claude",
@@ -223,7 +260,7 @@ curl -X POST "https://YOUR_DOMAIN/api/external/register" \
   "success": true,
   "data": {
     "id": 12,
-    "email": "claude_8f2a1b@yourdomain.com",
+    "email": "claude_8f2a1b@439949.xyz",
     "platform_name": "Claude"
   }
 }</code></pre>
@@ -237,7 +274,7 @@ curl -X POST "https://YOUR_DOMAIN/api/external/register" \
           <h2>系统设置与配置提示</h2>
           <div class="setting-item">
             <label>当前 Cloudflare 自建域名列表：</label>
-            <div id="cfDomainsDisplay" class="setting-value">加载中...</div>
+            <div id="cfDomainsDisplay" class="setting-value">439949.xyz</div>
           </div>
           <div class="setting-item">
             <label>修改管理员登录密码：</label>
@@ -247,15 +284,29 @@ curl -X POST "https://YOUR_DOMAIN/api/external/register" \
             </div>
           </div>
           <div class="setting-item">
-            <label>Cloudflare Email Routing 接入指引：</label>
-            <p class="text-muted text-sm">
-              在 Cloudflare 仪表盘 ➔ 域名 ➔ Email Routing ➔ 路由规则中，设置 Catch-all 操作为 <b>发送到 Worker (Send to Worker)</b>，目标选择本 Worker，即可将全域邮件秒推至系统！
-            </p>
+            <label>Cloudflare Email Routing 接入状态：</label>
+            <div class="routing-status-badge">
+              <span class="status-dot green"></span> 已在 <b>439949.xyz</b> 开启 Catch-All 邮件路由直通 Worker
+            </div>
           </div>
         </div>
       </section>
 
     </main>
+
+    <!-- ================= 全局 Spotlight (Cmd+K) 秒级弹窗 ================= -->
+    <div id="spotlightModal" class="modal-backdrop">
+      <div class="spotlight-dialog">
+        <div class="spotlight-input-box">
+          <span class="spotlight-icon">🔍</span>
+          <input type="text" id="spotlightInput" placeholder="搜索任意平台、邮箱地址、用户名、备注或验证码..." autocomplete="off" />
+          <span class="kbd-badge">ESC 关闭</span>
+        </div>
+        <div class="spotlight-results" id="spotlightResults">
+          <div class="spotlight-empty">输入关键字即刻秒级定位任何账号或邮箱...</div>
+        </div>
+      </div>
+    </div>
 
     <!-- ================= 弹窗: 登记/编辑平台台账 ================= -->
     <div id="vaultModal" class="modal-backdrop">
@@ -279,7 +330,7 @@ curl -X POST "https://YOUR_DOMAIN/api/external/register" \
               <label>注册所用邮箱 *</label>
               <button type="button" id="autoGenEmailBtn" class="btn-link">⚡ 一键生成自建域名新邮箱</button>
             </div>
-            <input type="email" id="vaultEmailInput" placeholder="xxx@yourdomain.com 或 outlook邮箱" required />
+            <input type="email" id="vaultEmailInput" placeholder="xxx@439949.xyz 或 outlook邮箱" required />
           </div>
           <div class="form-row">
             <div class="form-group">

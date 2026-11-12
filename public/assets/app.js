@@ -1,4 +1,4 @@
-// MailHub & Vault 前端交互脚本
+// MailHub & Vault 前端交互脚本 (海量邮箱专属优化版)
 (function () {
   'use strict';
 
@@ -6,6 +6,9 @@
   const state = {
     currentTab: 'vault',
     vaultAccounts: [],
+    platformSummary: [],
+    selectedPlatform: '',
+    onlyHasCode: false,
     cfMails: [],
     recipients: [],
     selectedRecipient: '',
@@ -29,13 +32,21 @@
     statOutlook: document.getElementById('statOutlook'),
     cfMailCountBadge: document.getElementById('cfMailCountBadge'),
 
-    // 台账元素
+    // 平台胶囊与台账
+    platformChipsList: document.getElementById('platformChipsList'),
     vaultTableBody: document.getElementById('vaultTableBody'),
     vaultSearchInput: document.getElementById('vaultSearchInput'),
     vaultCategoryFilter: document.getElementById('vaultCategoryFilter'),
     vaultStatusFilter: document.getElementById('vaultStatusFilter'),
+    toggleHasCodeBtn: document.getElementById('toggleHasCodeBtn'),
     openNewVaultModalBtn: document.getElementById('openNewVaultModalBtn'),
     exportVaultBtn: document.getElementById('exportVaultBtn'),
+
+    // 全局 Spotlight (Cmd+K)
+    globalSpotlightTrigger: document.getElementById('globalSpotlightTrigger'),
+    spotlightModal: document.getElementById('spotlightModal'),
+    spotlightInput: document.getElementById('spotlightInput'),
+    spotlightResults: document.getElementById('spotlightResults'),
 
     // 模态弹窗
     vaultModal: document.getElementById('vaultModal'),
@@ -61,8 +72,11 @@
 
     // 自建收信箱元素
     recipientList: document.getElementById('recipientList'),
+    recipientTotalCount: document.getElementById('recipientTotalCount'),
     totalRecipientCount: document.getElementById('totalRecipientCount'),
+    recipientSearchInput: document.getElementById('recipientSearchInput'),
     mailSearchInput: document.getElementById('mailSearchInput'),
+    currentRecipientDisplay: document.getElementById('currentRecipientDisplay'),
     mailListContainer: document.getElementById('mailListContainer'),
     refreshMailsBtn: document.getElementById('refreshMailsBtn'),
     cleanUnprotectedMailsBtn: document.getElementById('cleanUnprotectedMailsBtn'),
@@ -113,18 +127,16 @@
   // 轻提示 Toast
   function showToast(msg) {
     const toast = document.createElement('div');
-    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#10b981;color:#fff;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 10px 15px -3px rgba(0,0,0,0.3);';
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#10b981;color:#fff;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 10px 20px rgba(0,0,0,0.4);';
     toast.textContent = msg;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 2500);
   }
 
-  // 登录状态切换
   function showLogin(visible) {
     dom.loginOverlay.style.display = visible ? 'flex' : 'none';
   }
 
-  // 初始化主题
   function initTheme() {
     const savedTheme = localStorage.getItem('mailhub_theme') || 'dark';
     if (savedTheme === 'light') {
@@ -142,39 +154,84 @@
     localStorage.setItem('mailhub_theme', isLight ? 'light' : 'dark');
   }
 
-  // Tab 切换逻辑
   function switchTab(tabName) {
     state.currentTab = tabName;
     document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
     document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `view-${tabName}`));
 
-    if (tabName === 'vault') loadVaultData();
-    else if (tabName === 'cf-mails') loadCfMails();
-    else if (tabName === 'outlook') loadOutlookData();
-    else if (tabName === 'settings') loadSettings();
+    if (tabName === 'vault') {
+      loadPlatformSummary();
+      loadVaultData();
+    } else if (tabName === 'cf-mails') {
+      loadCfMails();
+    } else if (tabName === 'outlook') {
+      loadOutlookData();
+    } else if (tabName === 'settings') {
+      loadSettings();
+    }
   }
 
-  // 加载统计看板
-  async function loadStats() {
+  // 获取品牌 Avatar 样式类
+  function getBrandAvatar(platform) {
+    const p = (platform || '').toLowerCase();
+    let cls = 'plat-default';
+    let char = platform ? platform[0].toUpperCase() : 'P';
+    if (p.includes('openai') || p.includes('chatgpt')) { cls = 'plat-openai'; char = '⚡'; }
+    else if (p.includes('claude') || p.includes('anthropic')) { cls = 'plat-claude'; char = '🟣'; }
+    else if (p.includes('cursor')) { cls = 'plat-cursor'; char = '⚡'; }
+    else if (p.includes('github')) { cls = 'plat-github'; char = '🐙'; }
+    else if (p.includes('twitter') || p === 'x') { cls = 'plat-twitter'; char = '🐦'; }
+    else if (p.includes('google')) { cls = 'plat-google'; char = 'G'; }
+    else if (p.includes('discord')) { cls = 'plat-discord'; char = '💬'; }
+    return `<div class="platform-avatar ${cls}">${char}</div>`;
+  }
+
+  // ==================== 1. 平台台账与胶囊筛选模块 ====================
+  async function loadPlatformSummary() {
     try {
-      const res = await api('/api/vault/stats');
-      if (res.success && res.data) {
-        dom.statTotalVault.textContent = res.data.total_vault_accounts || 0;
-        dom.statActiveVault.textContent = res.data.active_vault_accounts || 0;
-        dom.statCfMails.textContent = res.data.total_cf_mails || 0;
-        dom.statOutlook.textContent = res.data.total_outlook_accounts || 0;
-        dom.cfMailCountBadge.textContent = res.data.total_cf_mails || 0;
+      const res = await api('/api/vault/platforms');
+      if (res.success && Array.isArray(res.data)) {
+        state.platformSummary = res.data;
+        renderPlatformChips();
       }
     } catch (e) {}
   }
 
-  // ==================== 1. 平台台账模块 ====================
+  function renderPlatformChips() {
+    const totalCount = state.platformSummary.reduce((acc, cur) => acc + cur.count, 0);
+    const chipsHtml = state.platformSummary.map(p => {
+      const isAct = state.selectedPlatform.toLowerCase() === p.platform_name.toLowerCase() ? 'active' : '';
+      return `
+        <button class="chip-item ${isAct}" onclick="filterByPlatform('${p.platform_name}')">
+          <span>${p.platform_name}</span>
+          <span style="opacity:0.75;">(${p.count})</span>
+        </button>
+      `;
+    }).join('');
+
+    dom.platformChipsList.innerHTML = `
+      <button class="chip-item ${state.selectedPlatform === '' ? 'active' : ''}" onclick="filterByPlatform('')">
+        全部平台 (${totalCount})
+      </button>
+      ${chipsHtml}
+    `;
+  }
+
+  window.filterByPlatform = function (plat) {
+    state.selectedPlatform = plat;
+    renderPlatformChips();
+    loadVaultData();
+  };
+
   async function loadVaultData() {
     try {
       const q = encodeURIComponent(dom.vaultSearchInput.value);
       const cat = encodeURIComponent(dom.vaultCategoryFilter.value);
       const status = encodeURIComponent(dom.vaultStatusFilter.value);
-      const res = await api(`/api/vault?q=${q}&category=${cat}&status=${status}`);
+      const plat = encodeURIComponent(state.selectedPlatform);
+      const hasCode = state.onlyHasCode ? 'true' : 'false';
+
+      const res = await api(`/api/vault?q=${q}&category=${cat}&status=${status}&platform=${plat}&has_code=${hasCode}`);
       if (res.success) {
         state.vaultAccounts = res.data || [];
         renderVaultTable();
@@ -185,7 +242,7 @@
 
   function renderVaultTable() {
     if (state.vaultAccounts.length === 0) {
-      dom.vaultTableBody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">暂无符合条件的平台台账记录</td></tr>';
+      dom.vaultTableBody.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted">暂无符合条件的平台台账记录，点击右上角【➕ 登记平台账号】添加</td></tr>';
       return;
     }
 
@@ -205,7 +262,7 @@
       };
 
       const codeBadgeHtml = acc.last_code
-        ? `<div class="code-badge">
+        ? `<div class="code-badge" title="最新接收到的验证码，点击复制">
              <span>${acc.last_code}</span>
              <span class="code-copy-btn" onclick="copyText('${acc.last_code}', '验证码')">📋</span>
            </div>`
@@ -213,16 +270,32 @@
 
       const maskedPwd = acc.password ? `•••••••• <button class="btn-link" onclick="copyText('${acc.password}', '密码')">复制</button>` : '<span class="text-muted">-</span>';
 
+      const starIcon = acc.is_pinned ? '⭐' : '☆';
+      const starClass = acc.is_pinned ? 'star-btn pinned' : 'star-btn';
+
       return `
         <tr>
-          <td>
-            <strong>${acc.platform_name}</strong>
-            ${acc.platform_url ? `<a href="${acc.platform_url}" target="_blank" style="margin-left:4px;text-decoration:none;">🔗</a>` : ''}
+          <td align="center">
+            <button class="${starClass}" onclick="togglePinVault(${acc.id})" title="${acc.is_pinned ? '取消置顶' : '置顶此账号'}">${starIcon}</button>
           </td>
           <td>
-            <code>${acc.account_email}</code>
-            <button class="btn-link" onclick="copyText('${acc.account_email}', '邮箱')">复制</button>
-            <div style="margin-top:2px;">${emailSourceMap[acc.email_source] || ''}</div>
+            <div class="platform-cell">
+              ${getBrandAvatar(acc.platform_name)}
+              <div>
+                <strong>${acc.platform_name}</strong>
+                ${acc.platform_url ? `<a href="${acc.platform_url}" target="_blank" style="margin-left:4px;text-decoration:none;font-size:12px;">🔗</a>` : ''}
+                ${acc.proxy_node ? `<div style="font-size:11px;color:var(--text-dim);">🌐 ${acc.proxy_node}</div>` : ''}
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="email-cell">
+              <div class="email-address-wrapper">
+                <span class="email-text">${acc.account_email}</span>
+                <button class="btn-link" onclick="copyText('${acc.account_email}', '邮箱')">复制</button>
+              </div>
+              <div>${emailSourceMap[acc.email_source] || ''}</div>
+            </div>
           </td>
           <td>
             ${acc.username ? `${acc.username} <button class="btn-link" onclick="copyText('${acc.username}', '用户名')">复制</button>` : '<span class="text-muted">-</span>'}
@@ -232,13 +305,30 @@
           <td>${statusMap[acc.status] || acc.status}</td>
           <td>${codeBadgeHtml}</td>
           <td>
-            <button class="btn-sm btn-outline" onclick="editVaultRecord(${acc.id})">编辑</button>
-            <button class="btn-sm btn-outline text-danger" onclick="deleteVaultRecord(${acc.id})">删除</button>
+            <div style="display:flex;gap:4px;">
+              <button class="btn-sm btn-outline" onclick="editVaultRecord(${acc.id})">编辑</button>
+              <button class="btn-sm btn-outline text-danger" onclick="deleteVaultRecord(${acc.id})">删除</button>
+            </div>
           </td>
         </tr>
       `;
     }).join('');
   }
+
+  // 置顶切换
+  window.togglePinVault = async function (id) {
+    const res = await api(`/api/vault/${id}/pin`, { method: 'POST' });
+    if (res.success) {
+      loadVaultData();
+    }
+  };
+
+  // 仅看有验证码过滤
+  dom.toggleHasCodeBtn.addEventListener('click', () => {
+    state.onlyHasCode = !state.onlyHasCode;
+    dom.toggleHasCodeBtn.dataset.active = state.onlyHasCode ? 'true' : 'false';
+    loadVaultData();
+  });
 
   // 查收某个平台的最新验证码 (核心联动)
   window.fetchPlatformCode = async function (id) {
@@ -267,7 +357,7 @@
         } else {
           dom.codeResultContent.innerHTML = `
             <div style="padding:1.5rem 0;color:var(--text-muted);">
-              <div style="font-size:2rem;margin-bottom:0.5rem;">📭</div>
+              <div style="font-size:2.5rem;margin-bottom:0.5rem;">📭</div>
               <div>${d.message || '收件箱暂未收到新验证码邮件'}</div>
               <p style="font-size:12px;margin-top:6px;">请在平台点击发送验证码后，再次点击重试。</p>
             </div>
@@ -305,14 +395,14 @@
     const res = await api(`/api/vault/${id}`, { method: 'DELETE' });
     if (res.success) {
       showToast('已删除平台记录');
+      loadPlatformSummary();
       loadVaultData();
     }
   };
 
   // 一键生成自建域名临时邮箱
   dom.autoGenEmailBtn.addEventListener('click', () => {
-    const rawDomains = state.systemSettings.env_cf_domains || 'example.com';
-    const domain = rawDomains.split(',')[0].trim();
+    const domain = '439949.xyz';
     const plat = (dom.vaultPlatformInput.value || 'account').toLowerCase().replace(/[^a-z0-9]/g, '');
     const rand = Math.random().toString(36).substring(2, 8);
     const generated = `${plat}_${rand}@${domain}`;
@@ -345,6 +435,7 @@
     if (res.success) {
       showToast('台账记录已保存');
       dom.vaultModal.classList.remove('show');
+      loadPlatformSummary();
       loadVaultData();
     } else {
       alert(res.message || '保存失败');
@@ -375,11 +466,126 @@
     link.click();
   });
 
-  // ==================== 2. 自建域名收信模块 ====================
+  // ==================== 2. 全局 Spotlight (Cmd+K) 秒搜引擎 ====================
+  function openSpotlight() {
+    dom.spotlightModal.classList.add('show');
+    dom.spotlightInput.value = '';
+    dom.spotlightInput.focus();
+    renderSpotlightResults('');
+  }
+
+  function closeSpotlight() {
+    dom.spotlightModal.classList.remove('show');
+  }
+
+  dom.globalSpotlightTrigger.addEventListener('click', openSpotlight);
+
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (dom.spotlightModal.classList.contains('show')) {
+        closeSpotlight();
+      } else {
+        openSpotlight();
+      }
+    } else if (e.key === 'Escape' && dom.spotlightModal.classList.contains('show')) {
+      closeSpotlight();
+    }
+  });
+
+  dom.spotlightInput.addEventListener('input', (e) => {
+    renderSpotlightResults(e.target.value.trim());
+  });
+
+  function renderSpotlightResults(keyword) {
+    if (!keyword) {
+      // 默认展示最近/置顶的账号
+      const recents = state.vaultAccounts.slice(0, 8);
+      if (recents.length === 0) {
+        dom.spotlightResults.innerHTML = '<div class="spotlight-empty">输入平台名（如 openai）、邮箱或验证码即刻秒找...</div>';
+        return;
+      }
+      dom.spotlightResults.innerHTML = `
+        <div class="spotlight-group-title">快捷直达 / 常用账号</div>
+        ${recents.map(renderSpotlightItem).join('')}
+      `;
+      return;
+    }
+
+    const kw = keyword.toLowerCase();
+    const matchedVault = state.vaultAccounts.filter(a =>
+      a.platform_name.toLowerCase().includes(kw) ||
+      a.account_email.toLowerCase().includes(kw) ||
+      (a.username && a.username.toLowerCase().includes(kw)) ||
+      (a.remark && a.remark.toLowerCase().includes(kw)) ||
+      (a.last_code && a.last_code.includes(kw))
+    );
+
+    const matchedMails = state.cfMails.filter(m =>
+      (m.recipient && m.recipient.toLowerCase().includes(kw)) ||
+      (m.subject && m.subject.toLowerCase().includes(kw)) ||
+      (m.verification_code && m.verification_code.includes(kw)) ||
+      (m.sender && m.sender.toLowerCase().includes(kw))
+    ).slice(0, 5);
+
+    if (matchedVault.length === 0 && matchedMails.length === 0) {
+      dom.spotlightResults.innerHTML = `<div class="spotlight-empty">未找到包含 "${keyword}" 的平台账号或收信</div>`;
+      return;
+    }
+
+    let html = '';
+    if (matchedVault.length > 0) {
+      html += `<div class="spotlight-group-title">平台账号 (${matchedVault.length})</div>`;
+      html += matchedVault.slice(0, 10).map(renderSpotlightItem).join('');
+    }
+
+    if (matchedMails.length > 0) {
+      html += `<div class="spotlight-group-title">匹配收信 (${matchedMails.length})</div>`;
+      html += matchedMails.map(m => `
+        <div class="spotlight-item" onclick="closeSpotlight();openMailDetail(${m.id})">
+          <div class="spotlight-item-left">
+            <span>📬</span>
+            <div>
+              <div class="spotlight-item-title">${m.subject || '(无主题)'} ${m.verification_code ? `<span class="code-badge">${m.verification_code}</span>` : ''}</div>
+              <div class="spotlight-item-sub">至: ${m.recipient} · 来自: ${m.sender}</div>
+            </div>
+          </div>
+          <button class="btn-sm btn-secondary">查看</button>
+        </div>
+      `).join('');
+    }
+
+    dom.spotlightResults.innerHTML = html;
+  }
+
+  function renderSpotlightItem(acc) {
+    return `
+      <div class="spotlight-item" onclick="closeSpotlight();editVaultRecord(${acc.id})">
+        <div class="spotlight-item-left">
+          ${getBrandAvatar(acc.platform_name)}
+          <div>
+            <div class="spotlight-item-title">
+              ${acc.platform_name}
+              ${acc.last_code ? `<span class="code-badge" style="font-size:11px;padding:1px 4px;">${acc.last_code}</span>` : ''}
+            </div>
+            <div class="spotlight-item-sub">${acc.account_email}</div>
+          </div>
+        </div>
+        <div class="spotlight-item-actions" onclick="event.stopPropagation()">
+          <button class="btn-sm btn-secondary" onclick="copyText('${acc.account_email}', '邮箱')">复制邮箱</button>
+          ${acc.password ? `<button class="btn-sm btn-secondary" onclick="copyText('${acc.password}', '密码')">复制密码</button>` : ''}
+          <button class="btn-sm btn-primary" onclick="closeSpotlight();fetchPlatformCode(${acc.id})">⚡ 提取码</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // ==================== 3. 自建域名收信模块 (海量邮箱优化) ====================
   async function loadCfMails() {
     try {
       // 1. 加载收件地址列表
-      const recRes = await api('/api/cf-mails/recipients');
+      const searchAddress = dom.recipientSearchInput.value.trim();
+      const recRes = await api(`/api/cf-mails/recipients?q=${encodeURIComponent(searchAddress)}`);
       if (recRes.success) {
         state.recipients = recRes.data || [];
         renderRecipients();
@@ -401,18 +607,24 @@
     const itemsHtml = state.recipients.map(r => {
       totalCount += r.mail_count;
       const isAct = state.selectedRecipient === r.recipient ? 'active' : '';
+      const unreadBadge = r.unread_count > 0 ? `<span class="recipient-unread-badge">${r.unread_count}</span>` : '';
       return `
         <div class="recipient-item ${isAct}" onclick="filterRecipient('${r.recipient}')">
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;">${r.recipient}</span>
-          <span class="badge">${r.mail_count}</span>
+          <span class="recipient-name" title="${r.recipient}">${r.recipient}</span>
+          <div style="display:flex;align-items:center;gap:4px;">
+            ${unreadBadge}
+            <span class="badge">${r.mail_count}</span>
+            <span class="btn-link" onclick="event.stopPropagation();copyText('${r.recipient}', '邮箱')" title="复制此邮箱">📋</span>
+          </div>
         </div>
       `;
     }).join('');
 
+    dom.recipientTotalCount.textContent = state.recipients.length;
     dom.totalRecipientCount.textContent = totalCount;
     dom.recipientList.innerHTML = `
       <div class="recipient-item ${state.selectedRecipient === '' ? 'active' : ''}" onclick="filterRecipient('')">
-        <span>全部收件箱</span>
+        <span class="recipient-name">全部收件箱</span>
         <span class="badge">${totalCount}</span>
       </div>
       ${itemsHtml}
@@ -421,8 +633,13 @@
 
   window.filterRecipient = function (email) {
     state.selectedRecipient = email;
+    dom.currentRecipientDisplay.textContent = email ? `当前查看: ${email}` : '当前查看: 全部收件箱';
     loadCfMails();
   };
+
+  dom.recipientSearchInput.addEventListener('input', debounce(() => {
+    loadCfMails();
+  }, 250));
 
   function renderMailList() {
     if (state.cfMails.length === 0) {
@@ -485,7 +702,6 @@
     dom.mailViewModal.classList.add('show');
   };
 
-  // 清理临时测试邮件
   dom.cleanUnprotectedMailsBtn.addEventListener('click', async () => {
     if (!confirm('确认清理未绑定平台账号的临时测试邮件吗？（已绑定平台的邮件将受保护不被清理）')) return;
     const res = await api('/api/cf-mails/clean', { method: 'POST' });
@@ -496,7 +712,7 @@
     }
   });
 
-  // ==================== 3. Outlook 矩阵模块 ====================
+  // ==================== 4. Outlook 矩阵模块 ====================
   async function loadOutlookData() {
     try {
       const res = await api('/api/outlook/accounts');
@@ -556,13 +772,13 @@
     }
   });
 
-  // ==================== 4. 设置模块 ====================
+  // ==================== 5. 设置模块 ====================
   async function loadSettings() {
     try {
       const res = await api('/api/settings');
       if (res.success && res.data) {
         state.systemSettings = res.data;
-        dom.cfDomainsDisplay.textContent = res.data.env_cf_domains || '未在 wrangler.toml 中配置 CF_DOMAINS 环境变量';
+        dom.cfDomainsDisplay.textContent = res.data.env_cf_domains || '439949.xyz';
       }
     } catch (e) {}
   }
@@ -579,7 +795,21 @@
     }
   });
 
-  // ==================== 全局弹窗关闭事件 ====================
+  // 加载统计看板
+  async function loadStats() {
+    try {
+      const res = await api('/api/vault/stats');
+      if (res.success && res.data) {
+        dom.statTotalVault.textContent = res.data.total_vault_accounts || 0;
+        dom.statActiveVault.textContent = res.data.active_vault_accounts || 0;
+        dom.statCfMails.textContent = res.data.total_cf_mails || 0;
+        dom.statOutlook.textContent = res.data.total_outlook_accounts || 0;
+        dom.cfMailCountBadge.textContent = res.data.total_cf_mails || 0;
+      }
+    } catch (e) {}
+  }
+
+  // ==================== 全局弹窗与事件绑定 ====================
   document.querySelectorAll('.modal-close, .modal-close-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('show'));
@@ -598,7 +828,6 @@
     dom.outlookModal.classList.add('show');
   });
 
-  // 搜索联动防抖
   let debounceTimer;
   function debounce(fn, ms = 300) {
     return (...args) => {
@@ -645,6 +874,7 @@
     try {
       await loadStats();
       await loadSettings();
+      await loadPlatformSummary();
       switchTab('vault');
     } catch (e) {}
   }
