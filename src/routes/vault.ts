@@ -144,13 +144,30 @@ app.post('/', async (c) => {
     )
     .run();
 
-  // 如果关联的是自建域名收信，将已有历史邮件打上 is_protected 标记
+  // 如果关联的是自建域名收信，将已有历史邮件打上 is_protected 标记，并自动将该邮箱纳为永久保护
   if (email_source === 'cf_domain') {
+    const cleanEmail = account_email.toLowerCase().trim();
+    const vaultId = res.meta.last_row_id;
     await c.env.DB.prepare(
       'UPDATE cf_inbox_mails SET is_protected = 1 WHERE LOWER(recipient) = ?'
     )
-      .bind(account_email.toLowerCase().trim())
+      .bind(cleanEmail)
       .run();
+
+    // 更新或补录到临时邮箱生命周期表，锁定为永久保留
+    const existingMb = await c.env.DB.prepare('SELECT id FROM temp_mailboxes WHERE LOWER(address) = ?').bind(cleanEmail).first();
+    if (existingMb) {
+      await c.env.DB.prepare(
+        "UPDATE temp_mailboxes SET is_permanent = 1, associated_platform = ?, associated_vault_id = ?, updated_at = datetime('now') WHERE id = ?"
+      ).bind(platform_name, vaultId, existingMb.id).run();
+    } else {
+      const parts = cleanEmail.split('@');
+      await c.env.DB.prepare(
+        `INSERT OR IGNORE INTO temp_mailboxes (
+          address, prefix, domain, is_permanent, associated_platform, associated_vault_id, remark
+        ) VALUES (?, ?, ?, 1, ?, ?, ?)`
+      ).bind(cleanEmail, parts[0] || '', parts[1] || '', platform_name, vaultId, '关联自平台台账自动转为永久').run();
+    }
   }
 
   return c.json({

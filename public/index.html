@@ -21,7 +21,8 @@
         </div>
         <nav class="nav-tabs">
           <button class="nav-tab active" data-tab="vault">📋 平台台账</button>
-          <button class="nav-tab" data-tab="cf-mails">📬 自建收信箱 <span id="cfMailCountBadge" class="badge-count">0</span></button>
+          <button class="nav-tab" data-tab="temp-mail">⚡ 临时邮箱 <span id="activeMailboxBadge" class="badge-count-green">在线</span></button>
+          <button class="nav-tab" data-tab="cf-mails">📬 全部收件箱 <span id="cfMailCountBadge" class="badge-count">0</span></button>
           <button class="nav-tab" data-tab="outlook">🏢 Outlook 矩阵</button>
           <button class="nav-tab" data-tab="api-doc">⚡ 自动化 API</button>
           <button class="nav-tab" data-tab="settings">⚙️ 设置</button>
@@ -138,6 +139,119 @@
               <tr><td colspan="9" class="text-center py-4 text-muted">正在加载台账数据...</td></tr>
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- ================= 视图: 临时邮箱专属生成台与生命周期管理 ================= -->
+      <section id="view-temp-mail" class="tab-view">
+        <div class="temp-mail-page">
+          <!-- 顶部: 快速生成与当前活跃邮箱工作台 -->
+          <div class="card active-mailbox-card">
+            <div class="active-mailbox-header">
+              <div class="mailbox-badge-wrapper">
+                <span class="badge-status-dot"></span>
+                <span class="mailbox-header-title">当前活跃临时邮箱</span>
+                <span id="activeMailboxExpiresBadge" class="expires-countdown-badge">⏱️ 倒计时 60:00</span>
+              </div>
+              <div class="active-mailbox-actions">
+                <button type="button" id="btnExtendMailbox" class="btn btn-sm btn-secondary" title="延长60分钟">⏱️ +1小时</button>
+                <button type="button" id="btnTogglePermanent" class="btn btn-sm btn-secondary" title="设置为永久保留">♾️ 设为永久</button>
+                <button type="button" id="btnQuickRegisterFromTemp" class="btn btn-sm btn-primary">⚡ 一键登记为平台账号</button>
+                <button type="button" id="btnRegenerateMailbox" class="btn btn-sm btn-outline">🔄 重新随机生成</button>
+              </div>
+            </div>
+
+            <!-- 邮箱巨大展示栏 -->
+            <div class="mailbox-display-box">
+              <span class="mailbox-icon">📬</span>
+              <span id="activeMailboxAddress" class="mailbox-address-text">正在分配临时邮箱...</span>
+              <button type="button" id="btnCopyActiveMailbox" class="btn btn-primary btn-copy-hero">
+                <span>📋</span> 复制邮箱
+              </button>
+            </div>
+
+            <!-- 自定义生成折叠区域 -->
+            <div class="custom-gen-bar">
+              <div class="custom-gen-left">
+                <div class="gen-input-group">
+                  <span class="gen-addon">前缀</span>
+                  <input type="text" id="customTempPrefixInput" placeholder="自定义前缀 (如 test_openai)" />
+                </div>
+                <div class="gen-input-group">
+                  <span class="gen-addon">域名</span>
+                  <select id="customTempDomainSelect" class="select-control"></select>
+                </div>
+                <div class="gen-input-group">
+                  <span class="gen-addon">有效期</span>
+                  <select id="customTempDurationSelect" class="select-control">
+                    <option value="60" selected>默认 1 小时 (60分钟)</option>
+                    <option value="120">2 小时 (120分钟)</option>
+                    <option value="1440">24 小时 (1天)</option>
+                    <option value="-1">♾️ 永久保留 (不随时间清理)</option>
+                  </select>
+                </div>
+                <button type="button" id="btnCreateCustomTempMailbox" class="btn btn-secondary">⚡ 生成指定邮箱</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 中部: 该临时邮箱的专属实时收件流 -->
+          <div class="card current-temp-inbox-card">
+            <div class="section-toolbar">
+              <div class="section-toolbar-left">
+                <h3>📥 专属实时收件流</h3>
+                <span class="live-pulse-badge"><span class="radar-ping"></span> 实时监听中</span>
+                <span id="tempMailboxFilterTip" class="text-muted text-sm">监听中...</span>
+              </div>
+              <div class="section-toolbar-right">
+                <button type="button" id="refreshTempInboxBtn" class="btn btn-sm btn-secondary">🔄 手动刷新</button>
+              </div>
+            </div>
+
+            <div id="tempInboxListContainer" class="temp-inbox-list">
+              <div class="empty-state">
+                <div class="empty-icon">📡</div>
+                <div class="empty-title">等待邮件到达中...</div>
+                <div class="empty-subtitle">使用上方临时邮箱在平台（如 OpenAI、Cursor 等）注册，收到邮件将在此实时提取验证码</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 底部: 临时邮箱全生命周期台账记录 (账号记录与管理) -->
+          <div class="temp-mailboxes-ledger-section">
+            <div class="section-toolbar">
+              <div class="section-toolbar-left">
+                <h3>🗂️ 临时邮箱生命周期台账与归档</h3>
+                <span class="text-muted text-sm">查看已生成的临时邮箱、有效期剩余、是否永久及绑定的平台</span>
+              </div>
+              <div class="section-toolbar-right">
+                <div class="mailbox-filter-chips">
+                  <button type="button" class="mb-filter-chip active" data-filter="all">全部 (<span id="mbTotalCount">0</span>)</button>
+                  <button type="button" class="mb-filter-chip" data-filter="active">活跃中 (<span id="mbActiveCount">0</span>)</button>
+                  <button type="button" class="mb-filter-chip" data-filter="permanent">永久有效 (<span id="mbPermanentCount">0</span>)</button>
+                  <button type="button" class="mb-filter-chip" data-filter="expired">已过期 (<span id="mbExpiredCount">0</span>)</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>状态 / 有效期</th>
+                    <th>临时邮箱地址</th>
+                    <th>关联平台</th>
+                    <th>收件数</th>
+                    <th>生成时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="tempMailboxesTableBody">
+                  <tr><td colspan="6" class="text-center py-4 text-muted">正在加载临时邮箱记录...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -487,17 +601,78 @@
       </div>
     </div>
 
-    <!-- ================= 弹窗: 邮件全文查看 ================= -->
+    <!-- ================= 弹窗: 邮件全文查看 (Apple Mail 级极简设计) ================= -->
     <div id="mailViewModal" class="modal-backdrop">
-      <div class="modal-content modal-lg">
-        <div class="modal-header">
-          <h3 id="mailModalSubject">邮件详情</h3>
-          <button class="modal-close">&times;</button>
+      <div class="modal-content modal-reader">
+        <!-- 顶部操作栏 -->
+        <div class="mail-reader-toolbar">
+          <div class="mail-reader-toolbar-left">
+            <span class="reader-app-icon">📬</span>
+            <span class="reader-app-title">邮件正文阅读器</span>
+          </div>
+          <div class="mail-reader-toolbar-right">
+            <button type="button" id="mailQuickRegisterBtn" class="btn btn-sm btn-primary">⚡ 一键登记为平台账号</button>
+            <button type="button" id="mailCopyBodyBtn" class="btn btn-sm btn-secondary">📋 复制正文</button>
+            <button type="button" id="mailDeleteBtn" class="btn btn-sm btn-danger-soft">🗑️ 删除</button>
+            <button type="button" class="modal-close">&times;</button>
+          </div>
         </div>
-        <div class="mail-modal-meta" id="mailModalMeta"></div>
+
+        <!-- 邮件元信息卡片 -->
+        <div class="mail-reader-header">
+          <h2 id="mailModalSubject" class="mail-reader-subject">正在加载邮件详情...</h2>
+          <div class="mail-reader-meta-row">
+            <div class="mail-sender-profile">
+              <div class="mail-sender-avatar" id="mailSenderAvatar">M</div>
+              <div class="mail-sender-details">
+                <div class="mail-sender-name-wrapper">
+                  <span id="mailSenderName" class="mail-sender-name">发件人</span>
+                  <span id="mailSenderEmail" class="mail-sender-email">&lt;email&gt;</span>
+                </div>
+                <div class="mail-recipient-info">
+                  <span class="recipient-tag">收件地址: <code id="mailRecipientAddress">xxx@439949.xyz</code></span>
+                </div>
+              </div>
+            </div>
+            <div class="mail-meta-badges">
+              <div class="mail-time-pill" id="mailModalTime">2026-11-12 00:00:00</div>
+              <div class="security-badges" id="mailSecurityBadges">
+                <span class="sec-badge sec-pass">🛡️ SPF 通过</span>
+                <span class="sec-badge sec-pass">🔑 DKIM 已签名</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 验证码与激活链接置顶高亮横幅 (如果识别到) -->
+        <div id="mailHeroCodeBanner" class="mail-hero-code-banner" style="display:none;">
+          <div class="hero-code-left">
+            <span class="hero-code-icon">⚡</span>
+            <div class="hero-code-info">
+              <span class="hero-code-label">已智能识别验证码</span>
+              <span id="mailHeroCodeVal" class="hero-code-val">849201</span>
+            </div>
+          </div>
+          <div class="hero-code-actions">
+            <button type="button" id="copyHeroCodeBtn" class="btn btn-success">📋 点击复制验证码</button>
+            <a id="openHeroLinkBtn" href="#" target="_blank" class="btn btn-outline" style="display:none;">🔗 打开验证链接 ↗</a>
+          </div>
+        </div>
+
+        <!-- 正文视图模式切换 -->
+        <div class="mail-view-mode-bar">
+          <div class="view-mode-segmented">
+            <button type="button" class="view-mode-btn active" data-mode="html">🎨 富文本 HTML 预览</button>
+            <button type="button" class="view-mode-btn" data-mode="text">📄 纯文本正文</button>
+            <button type="button" class="view-mode-btn" data-mode="raw">🔤 邮件头信息</button>
+          </div>
+        </div>
+
+        <!-- 邮件正文容器 -->
         <div class="mail-modal-body">
           <div id="mailIframeContainer" class="mail-iframe-container"></div>
           <div id="mailTextFallback" class="mail-text-view" style="display:none;"></div>
+          <pre id="mailRawFallback" class="mail-raw-view" style="display:none;"><code></code></pre>
         </div>
       </div>
     </div>

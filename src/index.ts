@@ -12,6 +12,7 @@ import outlookRoutes from './routes/outlook';
 import externalRoutes from './routes/external';
 import settingsRoutes from './routes/settings';
 import compatRoutes from './routes/compat';
+import mailboxRoutes from './routes/mailboxes';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -41,11 +42,13 @@ app.route('/api', compatRoutes); // 支持 /api/domains, /api/mailbox/*, /api/em
 
 // 3. 需管理员鉴权的核心接口 (台账、自建收信管理、Outlook 矩阵、设置)
 app.use('/api/vault/*', authMiddleware());
+app.use('/api/mailboxes/*', authMiddleware());
 app.use('/api/cf-mails/*', authMiddleware());
 app.use('/api/outlook/*', authMiddleware());
 app.use('/api/settings/*', authMiddleware());
 
 app.route('/api/vault', vaultRoutes);
+app.route('/api/mailboxes', mailboxRoutes);
 app.route('/api/cf-mails', cfMailRoutes);
 app.route('/api/outlook', outlookRoutes);
 app.route('/api/settings', settingsRoutes);

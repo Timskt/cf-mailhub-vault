@@ -13,7 +13,16 @@
     recipients: [],
     selectedRecipient: '',
     outlookAccounts: [],
-    systemSettings: {}
+    systemSettings: {},
+
+    // 临时邮箱工作台状态
+    activeMailbox: null,
+    tempMailboxes: [],
+    tempMailboxFilter: 'all',
+    tempMails: [],
+    countdownInterval: null,
+    tempPollInterval: null,
+    currentViewingMail: null
   };
 
   // DOM 元素引用
@@ -31,6 +40,28 @@
     statCfMails: document.getElementById('statCfMails'),
     statOutlook: document.getElementById('statOutlook'),
     cfMailCountBadge: document.getElementById('cfMailCountBadge'),
+
+    // 临时邮箱工作台
+    activeMailboxBadge: document.getElementById('activeMailboxBadge'),
+    activeMailboxAddress: document.getElementById('activeMailboxAddress'),
+    activeMailboxExpiresBadge: document.getElementById('activeMailboxExpiresBadge'),
+    btnCopyActiveMailbox: document.getElementById('btnCopyActiveMailbox'),
+    btnExtendMailbox: document.getElementById('btnExtendMailbox'),
+    btnTogglePermanent: document.getElementById('btnTogglePermanent'),
+    btnQuickRegisterFromTemp: document.getElementById('btnQuickRegisterFromTemp'),
+    btnRegenerateMailbox: document.getElementById('btnRegenerateMailbox'),
+    customTempPrefixInput: document.getElementById('customTempPrefixInput'),
+    customTempDomainSelect: document.getElementById('customTempDomainSelect'),
+    customTempDurationSelect: document.getElementById('customTempDurationSelect'),
+    btnCreateCustomTempMailbox: document.getElementById('btnCreateCustomTempMailbox'),
+    tempInboxListContainer: document.getElementById('tempInboxListContainer'),
+    refreshTempInboxBtn: document.getElementById('refreshTempInboxBtn'),
+    tempMailboxFilterTip: document.getElementById('tempMailboxFilterTip'),
+    tempMailboxesTableBody: document.getElementById('tempMailboxesTableBody'),
+    mbTotalCount: document.getElementById('mbTotalCount'),
+    mbActiveCount: document.getElementById('mbActiveCount'),
+    mbPermanentCount: document.getElementById('mbPermanentCount'),
+    mbExpiredCount: document.getElementById('mbExpiredCount'),
 
     // 平台胶囊与台账
     platformChipsList: document.getElementById('platformChipsList'),
@@ -85,6 +116,22 @@
     mailModalMeta: document.getElementById('mailModalMeta'),
     mailIframeContainer: document.getElementById('mailIframeContainer'),
     mailTextFallback: document.getElementById('mailTextFallback'),
+    mailRawFallback: document.getElementById('mailRawFallback'),
+
+    // 阅读器新元素
+    mailSenderAvatar: document.getElementById('mailSenderAvatar'),
+    mailSenderName: document.getElementById('mailSenderName'),
+    mailSenderEmail: document.getElementById('mailSenderEmail'),
+    mailRecipientAddress: document.getElementById('mailRecipientAddress'),
+    mailModalTime: document.getElementById('mailModalTime'),
+    mailSecurityBadges: document.getElementById('mailSecurityBadges'),
+    mailHeroCodeBanner: document.getElementById('mailHeroCodeBanner'),
+    mailHeroCodeVal: document.getElementById('mailHeroCodeVal'),
+    copyHeroCodeBtn: document.getElementById('copyHeroCodeBtn'),
+    openHeroLinkBtn: document.getElementById('openHeroLinkBtn'),
+    mailQuickRegisterBtn: document.getElementById('mailQuickRegisterBtn'),
+    mailCopyBodyBtn: document.getElementById('mailCopyBodyBtn'),
+    mailDeleteBtn: document.getElementById('mailDeleteBtn'),
 
     // Outlook 元素
     outlookTableBody: document.getElementById('outlookTableBody'),
@@ -167,9 +214,15 @@
     document.querySelectorAll('.nav-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabName));
     document.querySelectorAll('.tab-view').forEach(v => v.classList.toggle('active', v.id === `view-${tabName}`));
 
+    if (tabName !== 'temp-mail') {
+      if (state.tempPollInterval) clearInterval(state.tempPollInterval);
+    }
+
     if (tabName === 'vault') {
       loadPlatformSummary();
       loadVaultData();
+    } else if (tabName === 'temp-mail') {
+      loadTempMailPage();
     } else if (tabName === 'cf-mails') {
       loadCfMails();
     } else if (tabName === 'outlook') {
@@ -474,6 +527,365 @@
     link.click();
   });
 
+  // ==================== 1.5 临时邮箱工作台与生命周期管理 ====================
+  async function loadTempMailPage() {
+    initTempDomains();
+    await loadActiveMailbox();
+    await loadTempMailboxesList();
+  }
+
+  function initTempDomains() {
+    if (!dom.customTempDomainSelect) return;
+    const raw = (state.systemSettings.env_cf_domains || '439949.xyz');
+    const domains = raw.split(',').map(d => d.trim()).filter(Boolean);
+    dom.customTempDomainSelect.innerHTML = domains.map(d => `<option value="${d}">${d}</option>`).join('');
+  }
+
+  // 加载当前活跃临时邮箱（优先选择未过期的临时邮箱，若无则自动生成 1 个默认 1 小时的）
+  async function loadActiveMailbox() {
+    try {
+      const res = await api('/api/mailboxes?status=all');
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const found = res.data.find(m => !m.is_expired) || res.data[0];
+        setActiveMailbox(found);
+      } else {
+        await generateNewTempMailbox({ duration_minutes: 60, is_permanent: false });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function setActiveMailbox(mb) {
+    state.activeMailbox = mb;
+    renderActiveMailbox();
+    startCountdown();
+    if (mb && mb.address) {
+      loadTempMailboxInbox(mb.address);
+      startTempInboxPolling(mb.address);
+    }
+  }
+
+  function renderActiveMailbox() {
+    const mb = state.activeMailbox;
+    if (!mb) {
+      if (dom.activeMailboxAddress) dom.activeMailboxAddress.textContent = '暂无活跃邮箱，请点击生成';
+      if (dom.activeMailboxExpiresBadge) dom.activeMailboxExpiresBadge.textContent = '未分配';
+      return;
+    }
+
+    if (dom.activeMailboxAddress) dom.activeMailboxAddress.textContent = mb.address;
+    if (dom.tempMailboxFilterTip) {
+      dom.tempMailboxFilterTip.textContent = `收件监听: ${mb.address}`;
+    }
+
+    updateExpiresBadge();
+  }
+
+  function updateExpiresBadge() {
+    const mb = state.activeMailbox;
+    if (!mb || !dom.activeMailboxExpiresBadge) return;
+
+    if (mb.is_permanent) {
+      dom.activeMailboxExpiresBadge.className = 'expires-countdown-badge permanent';
+      dom.activeMailboxExpiresBadge.textContent = '♾️ 永久保留';
+      if (dom.btnTogglePermanent) dom.btnTogglePermanent.textContent = '⏱️ 取消永久';
+      return;
+    }
+
+    if (dom.btnTogglePermanent) dom.btnTogglePermanent.textContent = '♾️ 设为永久';
+
+    if (mb.is_expired || mb.remaining_seconds <= 0) {
+      dom.activeMailboxExpiresBadge.className = 'expires-countdown-badge';
+      dom.activeMailboxExpiresBadge.style.color = 'var(--apple-red)';
+      dom.activeMailboxExpiresBadge.textContent = '⚠️ 已过期 (点击延长)';
+    } else {
+      dom.activeMailboxExpiresBadge.className = 'expires-countdown-badge';
+      dom.activeMailboxExpiresBadge.style.color = '';
+      const m = Math.floor(mb.remaining_seconds / 60);
+      const s = mb.remaining_seconds % 60;
+      dom.activeMailboxExpiresBadge.textContent = `⏱️ 倒计时 ${m}分${s < 10 ? '0' : ''}${s}秒`;
+    }
+  }
+
+  function startCountdown() {
+    if (state.countdownInterval) clearInterval(state.countdownInterval);
+    state.countdownInterval = setInterval(() => {
+      const mb = state.activeMailbox;
+      if (!mb || mb.is_permanent) return;
+      if (mb.remaining_seconds > 0) {
+        mb.remaining_seconds--;
+        updateExpiresBadge();
+      } else {
+        mb.is_expired = true;
+        updateExpiresBadge();
+      }
+    }, 1000);
+  }
+
+  // 专属实时收件箱流
+  async function loadTempMailboxInbox(address) {
+    if (!address) return;
+    try {
+      const res = await api(`/api/emails/list?address=${encodeURIComponent(address)}`);
+      if (res && Array.isArray(res.emails)) {
+        state.tempMails = res.emails;
+        renderTempInboxList();
+      }
+    } catch (e) {}
+  }
+
+  function startTempInboxPolling(address) {
+    if (state.tempPollInterval) clearInterval(state.tempPollInterval);
+    state.tempPollInterval = setInterval(() => {
+      if (state.currentTab === 'temp-mail' && state.activeMailbox && state.activeMailbox.address === address) {
+        loadTempMailboxInbox(address);
+      }
+    }, 4000);
+  }
+
+  function renderTempInboxList() {
+    if (!dom.tempInboxListContainer) return;
+    if (state.tempMails.length === 0) {
+      dom.tempInboxListContainer.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">📡</div>
+          <div class="empty-title">等待邮件到达中...</div>
+          <div class="empty-subtitle">使用上方临时邮箱在平台注册，新邮件将在几秒内自动展示并秒级提取验证码</div>
+        </div>
+      `;
+      return;
+    }
+
+    dom.tempInboxListContainer.innerHTML = state.tempMails.map(m => {
+      const codeBadge = m.verify_code
+        ? `<div class="code-badge" onclick="event.stopPropagation();copyText('${m.verify_code}', '验证码')">
+             <span>${m.verify_code}</span>
+             <span class="code-copy-btn">📋</span>
+           </div>`
+        : '';
+
+      const dkimBadge = m.dkim_verified === '通过'
+        ? '<span class="tag tag-active">🛡️ 已验真</span>'
+        : '';
+
+      return `
+        <div class="mail-item" onclick="openMailDetail(${m.id})">
+          <div class="mail-item-left">
+            <div class="mail-subject">${m.subject || '(无主题)'} ${dkimBadge}</div>
+            <div class="mail-sender">来自: <code>${m.from}</code> ➔ 至: <code>${m.to}</code></div>
+          </div>
+          <div class="mail-item-right">
+            ${codeBadge}
+            <span class="mail-time">${new Date(m.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // 临时邮箱全生命周期台账
+  async function loadTempMailboxesList() {
+    try {
+      const res = await api(`/api/mailboxes?status=${state.tempMailboxFilter}`);
+      if (res.success && Array.isArray(res.data)) {
+        state.tempMailboxes = res.data;
+        renderTempMailboxesTable();
+
+        // 更新计数
+        const allRes = await api('/api/mailboxes?status=all');
+        if (allRes.success && Array.isArray(allRes.data)) {
+          const all = allRes.data;
+          if (dom.mbTotalCount) dom.mbTotalCount.textContent = all.length;
+          if (dom.mbActiveCount) dom.mbActiveCount.textContent = all.filter(x => !x.is_expired && !x.is_permanent).length;
+          if (dom.mbPermanentCount) dom.mbPermanentCount.textContent = all.filter(x => x.is_permanent).length;
+          if (dom.mbExpiredCount) dom.mbExpiredCount.textContent = all.filter(x => x.is_expired).length;
+        }
+      }
+    } catch (e) {}
+  }
+
+  function renderTempMailboxesTable() {
+    if (!dom.tempMailboxesTableBody) return;
+    if (state.tempMailboxes.length === 0) {
+      dom.tempMailboxesTableBody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-muted">暂无符合条件的临时邮箱记录</td></tr>';
+      return;
+    }
+
+    dom.tempMailboxesTableBody.innerHTML = state.tempMailboxes.map(mb => {
+      let statusHtml = '';
+      if (mb.is_permanent) {
+        statusHtml = '<span class="mb-status-pill mb-status-permanent">♾️ 永久有效</span>';
+      } else if (mb.is_expired) {
+        statusHtml = '<span class="mb-status-pill mb-status-expired">⚪ 已过期</span>';
+      } else {
+        const mins = Math.ceil(mb.remaining_seconds / 60);
+        statusHtml = `<span class="mb-status-pill mb-status-active">🟢 剩余 ${mins} 分钟</span>`;
+      }
+
+      const platHtml = mb.associated_platform
+        ? `<span class="tag tag-category">🏢 ${mb.associated_platform}</span>`
+        : `<button class="btn-sm btn-link" onclick="quickRegisterSpecificMailbox('${mb.address}')">➕ 关联平台</button>`;
+
+      return `
+        <tr>
+          <td>${statusHtml}</td>
+          <td>
+            <div class="email-address-wrapper">
+              <span class="email-text"><b>${mb.address}</b></span>
+              <button class="btn-icon btn-sm" title="复制邮箱" onclick="copyText('${mb.address}', '邮箱')">📋</button>
+            </div>
+          </td>
+          <td>${platHtml}</td>
+          <td>
+            <button class="btn-sm btn-secondary" onclick="switchToMailbox('${mb.address}')">
+              📬 ${mb.mail_count || 0} 封
+            </button>
+          </td>
+          <td><span class="text-muted text-sm">${new Date(mb.created_at).toLocaleDateString()}</span></td>
+          <td>
+            <div style="display:flex;gap:4px;">
+              <button class="btn-sm btn-secondary" onclick="extendSpecificMailbox(${mb.id})" title="延长60分钟">⏱️ +1h</button>
+              <button class="btn-sm btn-secondary" onclick="togglePermanentSpecificMailbox(${mb.id})">
+                ${mb.is_permanent ? '取消永久' : '设为永久'}
+              </button>
+              <button class="btn-sm btn-outline text-danger" onclick="deleteSpecificMailbox(${mb.id})" title="销毁">🗑️</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  window.switchToMailbox = function(address) {
+    const found = state.tempMailboxes.find(m => m.address === address);
+    if (found) {
+      setActiveMailbox(found);
+      showToast(`已切换至邮箱: ${address}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  window.extendSpecificMailbox = async function(id) {
+    const res = await api(`/api/mailboxes/${id}/extend`, { method: 'POST', body: { minutes: 60 } });
+    if (res.success) {
+      showToast(res.message);
+      await loadActiveMailbox();
+      await loadTempMailboxesList();
+    }
+  };
+
+  window.togglePermanentSpecificMailbox = async function(id) {
+    const res = await api(`/api/mailboxes/${id}/toggle-permanent`, { method: 'POST' });
+    if (res.success) {
+      showToast(res.message);
+      await loadActiveMailbox();
+      await loadTempMailboxesList();
+    }
+  };
+
+  window.deleteSpecificMailbox = async function(id) {
+    if (!confirm('确认销毁该临时邮箱吗？')) return;
+    const res = await api(`/api/mailboxes/${id}`, { method: 'DELETE' });
+    if (res.success) {
+      showToast('已销毁该邮箱');
+      await loadActiveMailbox();
+      await loadTempMailboxesList();
+    }
+  };
+
+  window.quickRegisterSpecificMailbox = function(email) {
+    dom.vaultModalTitle.textContent = '登记平台账号';
+    dom.vaultForm.reset();
+    dom.vaultEditId.value = '';
+    dom.vaultEmailInput.value = email;
+    dom.vaultEmailSourceSelect.value = 'cf_domain';
+    dom.vaultModal.classList.add('show');
+  };
+
+  async function generateNewTempMailbox(options = {}) {
+    const res = await api('/api/mailboxes/generate', { method: 'POST', body: options });
+    if (res.success && res.data) {
+      showToast(res.message || '临时邮箱已生成');
+      setActiveMailbox(res.data);
+      loadTempMailboxesList();
+    } else {
+      alert(res.message || '生成失败');
+    }
+  }
+
+  // 临时邮箱工作台按钮事件
+  if (dom.btnCopyActiveMailbox) {
+    dom.btnCopyActiveMailbox.addEventListener('click', () => {
+      if (state.activeMailbox && state.activeMailbox.address) {
+        copyText(state.activeMailbox.address, '临时邮箱');
+      }
+    });
+  }
+
+  if (dom.btnExtendMailbox) {
+    dom.btnExtendMailbox.addEventListener('click', async () => {
+      if (!state.activeMailbox) return;
+      await window.extendSpecificMailbox(state.activeMailbox.id);
+    });
+  }
+
+  if (dom.btnTogglePermanent) {
+    dom.btnTogglePermanent.addEventListener('click', async () => {
+      if (!state.activeMailbox) return;
+      await window.togglePermanentSpecificMailbox(state.activeMailbox.id);
+    });
+  }
+
+  if (dom.btnRegenerateMailbox) {
+    dom.btnRegenerateMailbox.addEventListener('click', async () => {
+      await generateNewTempMailbox({ duration_minutes: 60, is_permanent: false });
+    });
+  }
+
+  if (dom.btnQuickRegisterFromTemp) {
+    dom.btnQuickRegisterFromTemp.addEventListener('click', () => {
+      if (!state.activeMailbox) return;
+      window.quickRegisterSpecificMailbox(state.activeMailbox.address);
+    });
+  }
+
+  if (dom.btnCreateCustomTempMailbox) {
+    dom.btnCreateCustomTempMailbox.addEventListener('click', async () => {
+      const prefix = dom.customTempPrefixInput.value.trim();
+      const domain = dom.customTempDomainSelect.value;
+      const durationVal = parseInt(dom.customTempDurationSelect.value, 10);
+      const isPermanent = durationVal <= 0;
+
+      await generateNewTempMailbox({
+        prefix,
+        domain,
+        duration_minutes: isPermanent ? 0 : durationVal,
+        is_permanent: isPermanent
+      });
+      dom.customTempPrefixInput.value = '';
+    });
+  }
+
+  if (dom.refreshTempInboxBtn) {
+    dom.refreshTempInboxBtn.addEventListener('click', () => {
+      if (state.activeMailbox) {
+        loadTempMailboxInbox(state.activeMailbox.address);
+        showToast('已刷新收件箱');
+      }
+    });
+  }
+
+  // 临时邮箱台账过滤切换
+  document.querySelectorAll('.mb-filter-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mb-filter-chip').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.tempMailboxFilter = btn.dataset.filter;
+      loadTempMailboxesList();
+    });
+  });
+
   // ==================== 2. 全局 Spotlight (Cmd+K) 秒搜引擎 ====================
   function openSpotlight() {
     dom.spotlightModal.classList.add('show');
@@ -686,17 +1098,94 @@
     const res = await api(`/api/cf-mails/${id}`);
     if (!res.success || !res.data) return;
     const m = res.data;
+    state.currentViewingMail = m;
 
     dom.mailModalSubject.textContent = m.subject || '(无主题)';
-    dom.mailModalMeta.innerHTML = `
-      <div style="font-size:13px;color:var(--text-muted);padding:8px 0;border-bottom:1px solid var(--border-color);margin-bottom:12px;">
-        <div><b>发件人:</b> ${m.sender_name ? `${m.sender_name} (${m.sender})` : m.sender}</div>
-        <div><b>收件人:</b> <code>${m.recipient}</code></div>
-        <div><b>接收时间:</b> ${m.created_at}</div>
-        ${m.verification_code ? `<div style="margin-top:6px;"><b>智能识别验证码:</b> <span class="code-badge">${m.verification_code}</span> <button class="btn-link" onclick="copyText('${m.verification_code}', '验证码')">一键复制</button></div>` : ''}
-      </div>
-    `;
 
+    // 发件人 Avatar 与姓名
+    const senderInitial = (m.sender_name || m.sender || 'M')[0].toUpperCase();
+    if (dom.mailSenderAvatar) dom.mailSenderAvatar.textContent = senderInitial;
+    if (dom.mailSenderName) dom.mailSenderName.textContent = m.sender_name || m.sender.split('@')[0];
+    if (dom.mailSenderEmail) dom.mailSenderEmail.textContent = `<${m.sender}>`;
+    if (dom.mailRecipientAddress) dom.mailRecipientAddress.textContent = m.recipient;
+    if (dom.mailModalTime) dom.mailModalTime.textContent = new Date(m.created_at).toLocaleString();
+
+    // 安全徽章
+    if (dom.mailSecurityBadges) {
+      let secHtml = '';
+      if (m.spf_status === 'pass') {
+        secHtml += '<span class="sec-badge sec-pass">🛡️ SPF 通过</span> ';
+      }
+      if (m.dkim_status === 'pass') {
+        secHtml += '<span class="sec-badge sec-pass">🔑 DKIM 已验真</span> ';
+      }
+      dom.mailSecurityBadges.innerHTML = secHtml || '<span class="sec-badge text-muted">标准邮件</span>';
+    }
+
+    // 验证码与激活链接置顶 Hero Banner
+    if (dom.mailHeroCodeBanner) {
+      if (m.verification_code || m.verification_link) {
+        dom.mailHeroCodeBanner.style.display = 'flex';
+        if (dom.mailHeroCodeVal) {
+          dom.mailHeroCodeVal.textContent = m.verification_code || '已识别到链接';
+        }
+        if (dom.copyHeroCodeBtn) {
+          dom.copyHeroCodeBtn.style.display = m.verification_code ? 'inline-flex' : 'none';
+          dom.copyHeroCodeBtn.onclick = () => copyText(m.verification_code, '验证码');
+        }
+        if (dom.openHeroLinkBtn) {
+          if (m.verification_link) {
+            dom.openHeroLinkBtn.style.display = 'inline-flex';
+            dom.openHeroLinkBtn.href = m.verification_link;
+          } else {
+            dom.openHeroLinkBtn.style.display = 'none';
+          }
+        }
+      } else {
+        dom.mailHeroCodeBanner.style.display = 'none';
+      }
+    }
+
+    // 正文视图模式切换
+    function setViewMode(mode) {
+      document.querySelectorAll('.view-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+      });
+
+      if (mode === 'html' && m.html_content) {
+        dom.mailIframeContainer.style.display = 'block';
+        dom.mailTextFallback.style.display = 'none';
+        if (dom.mailRawFallback) dom.mailRawFallback.style.display = 'none';
+      } else if (mode === 'text' || (!m.html_content && mode === 'html')) {
+        dom.mailIframeContainer.style.display = 'none';
+        dom.mailTextFallback.style.display = 'block';
+        if (dom.mailRawFallback) dom.mailRawFallback.style.display = 'none';
+        dom.mailTextFallback.textContent = m.text_content || '(无纯文本正文)';
+      } else if (mode === 'raw') {
+        dom.mailIframeContainer.style.display = 'none';
+        dom.mailTextFallback.style.display = 'none';
+        if (dom.mailRawFallback) {
+          dom.mailRawFallback.style.display = 'block';
+          dom.mailRawFallback.querySelector('code').textContent = 
+`Message-ID: ${m.message_id}
+From: ${m.sender_name} <${m.sender}>
+To: ${m.recipient}
+Subject: ${m.subject}
+Date: ${m.created_at}
+SPF: ${m.spf_status}
+DKIM: ${m.dkim_status}
+Raw Size: ${m.raw_size || 0} bytes
+Verification Code: ${m.verification_code || 'none'}
+Verification Link: ${m.verification_link || 'none'}`;
+        }
+      }
+    }
+
+    document.querySelectorAll('.view-mode-btn').forEach(b => {
+      b.onclick = () => setViewMode(b.dataset.mode);
+    });
+
+    // 默认如果含 html 则渲染 html，否则切到 text
     if (m.html_content) {
       dom.mailIframeContainer.innerHTML = '';
       const iframe = document.createElement('iframe');
@@ -704,13 +1193,55 @@
       iframe.sandbox = 'allow-popups';
       iframe.srcdoc = m.html_content;
       dom.mailIframeContainer.appendChild(iframe);
-      dom.mailIframeContainer.style.display = 'block';
-      dom.mailTextFallback.style.display = 'none';
+      setViewMode('html');
     } else {
-      dom.mailIframeContainer.innerHTML = '';
-      dom.mailIframeContainer.style.display = 'none';
-      dom.mailTextFallback.style.display = 'block';
-      dom.mailTextFallback.textContent = m.text_content || '(邮件内容为空)';
+      setViewMode('text');
+    }
+
+    // 工具栏操作绑定
+    if (dom.mailCopyBodyBtn) {
+      dom.mailCopyBodyBtn.onclick = () => {
+        copyText(m.text_content || m.html_content, '邮件正文');
+      };
+    }
+
+    if (dom.mailQuickRegisterBtn) {
+      dom.mailQuickRegisterBtn.onclick = () => {
+        dom.mailViewModal.classList.remove('show');
+        dom.vaultModalTitle.textContent = '从邮件一键登记平台账号';
+        dom.vaultForm.reset();
+        dom.vaultEditId.value = '';
+        dom.vaultEmailInput.value = m.recipient;
+        dom.vaultEmailSourceSelect.value = 'cf_domain';
+        dom.vaultRemarkInput.value = `由邮件自动转录（发件人: ${m.sender_name || m.sender}）`;
+        // 尝试智能推测平台名称
+        let inferredPlat = '';
+        const s = (m.sender + ' ' + (m.sender_name || '') + ' ' + (m.subject || '')).toLowerCase();
+        if (s.includes('openai') || s.includes('chatgpt')) inferredPlat = 'OpenAI';
+        else if (s.includes('claude') || s.includes('anthropic')) inferredPlat = 'Claude';
+        else if (s.includes('cursor')) inferredPlat = 'Cursor';
+        else if (s.includes('github')) inferredPlat = 'GitHub';
+        else if (s.includes('google')) inferredPlat = 'Google';
+        if (inferredPlat) dom.vaultPlatformInput.value = inferredPlat;
+
+        dom.vaultModal.classList.add('show');
+      };
+    }
+
+    if (dom.mailDeleteBtn) {
+      dom.mailDeleteBtn.onclick = async () => {
+        if (!confirm('确认删除这封邮件吗？')) return;
+        const delRes = await api(`/api/cf-mails/${m.id}`, { method: 'DELETE' });
+        if (delRes.success) {
+          showToast('邮件已删除');
+          dom.mailViewModal.classList.remove('show');
+          if (dom.mailIframeContainer) dom.mailIframeContainer.innerHTML = '';
+          loadCfMails();
+          if (state.currentTab === 'temp-mail' && state.activeMailbox) {
+            loadTempMailboxInbox(state.activeMailbox.address);
+          }
+        }
+      };
     }
 
     dom.mailViewModal.classList.add('show');

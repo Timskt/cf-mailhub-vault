@@ -79,3 +79,19 @@ export interface Tag {
   color: string;
   created_at: string;
 }
+
+export interface TempMailbox {
+  id: number;
+  address: string;
+  prefix: string;
+  domain: string;
+  expires_at: string;
+  is_permanent: number;
+  associated_platform: string;
+  associated_vault_id?: number | null;
+  remark: string;
+  is_pinned?: number;
+  mail_count?: number;
+  created_at: string;
+  updated_at: string;
+}
