@@ -299,10 +299,19 @@
       <section id="view-outlook" class="tab-view">
         <div class="toolbar">
           <div class="toolbar-left">
-            <h2>微软 Outlook / Hotmail 账号托管</h2>
+            <div class="toolbar-title-group">
+              <h2>微软 Outlook / Hotmail 账号托管</h2>
+              <span class="badge" id="outlookTotalCountBadge">0 个账号</span>
+            </div>
+            <div class="search-box">
+              <span class="input-icon">🔍</span>
+              <input type="text" id="outlookSearchInput" placeholder="按邮箱地址、备注或分组快速搜索..." />
+            </div>
           </div>
           <div class="toolbar-right">
-            <button id="addOutlookModalBtn" class="btn btn-primary">➕ 添加 Outlook 账号</button>
+            <button id="batchOutlookModalBtn" class="btn btn-primary">⚡ 批量导入账号</button>
+            <button id="addOutlookModalBtn" class="btn btn-secondary">➕ 单个添加</button>
+            <button id="refreshOutlookBtn" class="btn btn-icon" title="刷新列表">🔄</button>
           </div>
         </div>
         <div class="table-container">
@@ -310,16 +319,17 @@
             <thead>
               <tr>
                 <th>邮箱地址</th>
+                <th>登录密码</th>
                 <th>Client ID</th>
                 <th>分组</th>
-                <th>状态</th>
-                <th>备注</th>
-                <th>添加时间</th>
+                <th>OAuth 状态</th>
+                <th>备注说明</th>
+                <th>更新时间</th>
                 <th>操作</th>
               </tr>
             </thead>
             <tbody id="outlookTableBody">
-              <tr><td colspan="7" class="text-center py-4">暂无 Outlook 账号</td></tr>
+              <tr><td colspan="8" class="text-center py-4">暂无 Outlook 账号</td></tr>
             </tbody>
           </table>
         </div>
@@ -673,6 +683,115 @@
           <div id="mailIframeContainer" class="mail-iframe-container"></div>
           <div id="mailTextFallback" class="mail-text-view" style="display:none;"></div>
           <pre id="mailRawFallback" class="mail-raw-view" style="display:none;"><code></code></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 弹窗: 微软 Outlook / Hotmail 批量导入 ================= -->
+    <div id="batchOutlookModal" class="modal-backdrop">
+      <div class="modal-content modal-lg">
+        <div class="modal-header">
+          <div class="modal-title-with-badge">
+            <span class="modal-title-icon">⚡</span>
+            <div>
+              <h3>批量导入 Outlook / Hotmail 账号</h3>
+              <p class="modal-subtitle">支持邮箱商常见多格式批量粘贴，自动精准提取邮箱、密码、Client ID 与 Refresh Token</p>
+            </div>
+          </div>
+          <button type="button" class="modal-close">&times;</button>
+        </div>
+
+        <div class="batch-modal-body">
+          <!-- 格式引导与示例卡片 -->
+          <div class="batch-format-card">
+            <div class="batch-format-header">
+              <span class="format-badge">支持格式示例</span>
+              <button type="button" id="btnFillBatchSample" class="btn-text-action">填入示例数据</button>
+            </div>
+            <pre class="batch-format-example"><code>MichelenaRosich405@outlook.com----GyehZl1D----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C530_BAY.0.U.MsaArtifacts...
+user2@hotmail.com----password123----M.C530_BAY... (未填 Client ID 时将自动补齐公用 ID)
+user3@outlook.com----pwd888----client-id----refresh-token----辅助邮箱备注</code></pre>
+            <div class="batch-format-tips">
+              <span>💡 分隔符自适应支持：<code>----</code>、<code>---</code>、<code>::</code>、<code>|</code>、制表符或逗号；每行一个账号。</span>
+            </div>
+          </div>
+
+          <!-- 输入区域 -->
+          <div class="batch-input-wrapper">
+            <div class="batch-textarea-header">
+              <label for="batchOutlookTextarea">原始账号多行文本：</label>
+              <div class="batch-textarea-actions">
+                <span id="batchLineCountIndicator" class="text-muted text-sm">共 0 行</span>
+                <button type="button" id="btnClearBatchInput" class="btn-text-action text-danger">清空</button>
+              </div>
+            </div>
+            <textarea
+              id="batchOutlookTextarea"
+              class="batch-textarea"
+              rows="7"
+              placeholder="请直接粘贴账号列表，例如：&#10;MichelenaRosich405@outlook.com----GyehZl1D----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C530_BAY...&#10;user@hotmail.com----password123----refresh_token"
+              spellcheck="false"
+            ></textarea>
+          </div>
+
+          <!-- 实时解析状态条 -->
+          <div class="batch-parse-summary-bar">
+            <div class="parse-summary-left">
+              <span class="summary-chip summary-valid">
+                <span class="chip-dot dot-success"></span>
+                识别有效: <strong id="batchValidCount">0</strong>
+              </span>
+              <span class="summary-chip summary-invalid">
+                <span class="chip-dot dot-warning"></span>
+                格式异常: <strong id="batchInvalidCount">0</strong>
+              </span>
+            </div>
+            <div class="parse-summary-right">
+              <label class="checkbox-label">
+                <input type="checkbox" id="batchSyncVaultCheckbox" checked />
+                <span>同时同步登记至平台资产台账 (Platform Vault)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 实时预览表格卡片 -->
+          <div class="batch-preview-container">
+            <div class="batch-preview-header">
+              <span class="preview-title">解析结果预览 (<span id="batchPreviewCount">0</span>)</span>
+              <span class="text-muted text-sm">输入文本后将在此实时展示识别明细</span>
+            </div>
+            <div class="batch-preview-scroll">
+              <table class="batch-preview-table">
+                <thead>
+                  <tr>
+                    <th style="width: 40px;">#</th>
+                    <th>邮箱地址</th>
+                    <th>密码</th>
+                    <th>Client ID</th>
+                    <th>Refresh Token</th>
+                    <th>备注</th>
+                    <th style="width: 70px;">状态</th>
+                  </tr>
+                </thead>
+                <tbody id="batchPreviewTableBody">
+                  <tr><td colspan="7" class="text-center py-4 text-muted">请在上方粘贴数据，将在此实时预览解析结果</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <div class="modal-footer-left">
+            <span id="batchSubmitStatusTip" class="text-muted text-sm"></span>
+          </div>
+          <div class="modal-footer-right">
+            <button type="button" class="btn btn-secondary modal-close-btn">取消</button>
+            <button type="button" id="btnSubmitBatchImport" class="btn btn-primary" disabled>
+              <span>⚡ 确认导入</span>
+              <span id="batchSubmitBtnCount"></span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

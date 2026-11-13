@@ -29,6 +29,9 @@ export const API_DOC_MD = `# MailHub & Vault 系统 API 接口文档
 | **台账** | \`POST\` | \`/api/vault\` | 登记新平台账号（可联动生成新邮箱） | 管理员 Cookie 或 API Key |
 | **台账** | \`GET\` | \`/api/vault/:id/code\` | ⚡ 一键提取该平台绑定的邮箱最新验证码 | 管理员 Cookie 或 API Key |
 | **Outlook**| \`GET\`| \`/api/outlook/accounts\` | 列出所有托管的微软 Outlook 账号 | 管理员 Cookie 或 API Key |
+| **Outlook**| \`POST\`| \`/api/outlook/batch-import\` | ⚡ 批量导入 Outlook/Hotmail 账号（自适应多格式） | 管理员 Cookie 或 API Key |
+| **Outlook**| \`POST\`| \`/api/outlook/parse-preview\`| 批量账号文本实时解析与合法性校验预览 | 管理员 Cookie 或 API Key |
+| **Outlook**| \`GET\`| \`/api/outlook/accounts/:id/code\` | ⚡ 单个托管账号直连微软 Graph 提取最新验证码 | 管理员 Cookie 或 API Key |
 
 ---
 
@@ -89,6 +92,10 @@ export const API_DOC_JSON = {
     { method: "GET", path: "/api/external/code", description: "Extract OTP code by email or platform" },
     { method: "POST", path: "/api/external/register", description: "Allocate mailbox and register in vault" },
     { method: "GET", path: "/api/vault", description: "List platform account vault" },
-    { method: "GET", path: "/api/vault/:id/code", description: "One-click fetch latest code for platform" }
+    { method: "GET", path: "/api/vault/:id/code", description: "One-click fetch latest code for platform" },
+    { method: "GET", path: "/api/outlook/accounts", description: "List hosted Outlook accounts" },
+    { method: "POST", path: "/api/outlook/batch-import", description: "Batch import Outlook/Hotmail accounts with auto-delimiter detection" },
+    { method: "POST", path: "/api/outlook/parse-preview", description: "Parse and preview batch raw text lines" },
+    { method: "GET", path: "/api/outlook/accounts/:id/code", description: "Directly extract verification code from Outlook account" }
   ]
 };

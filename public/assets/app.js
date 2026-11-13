@@ -13,6 +13,8 @@
     recipients: [],
     selectedRecipient: '',
     outlookAccounts: [],
+    outlookFilterQuery: '',
+    parsedBatchAccounts: [],
     systemSettings: {},
 
     // 临时邮箱工作台状态
@@ -136,6 +138,23 @@
     // Outlook 元素
     outlookTableBody: document.getElementById('outlookTableBody'),
     addOutlookModalBtn: document.getElementById('addOutlookModalBtn'),
+    batchOutlookModalBtn: document.getElementById('batchOutlookModalBtn'),
+    batchOutlookModal: document.getElementById('batchOutlookModal'),
+    batchOutlookTextarea: document.getElementById('batchOutlookTextarea'),
+    btnFillBatchSample: document.getElementById('btnFillBatchSample'),
+    btnClearBatchInput: document.getElementById('btnClearBatchInput'),
+    batchLineCountIndicator: document.getElementById('batchLineCountIndicator'),
+    batchValidCount: document.getElementById('batchValidCount'),
+    batchInvalidCount: document.getElementById('batchInvalidCount'),
+    batchSyncVaultCheckbox: document.getElementById('batchSyncVaultCheckbox'),
+    batchPreviewCount: document.getElementById('batchPreviewCount'),
+    batchPreviewTableBody: document.getElementById('batchPreviewTableBody'),
+    btnSubmitBatchImport: document.getElementById('btnSubmitBatchImport'),
+    batchSubmitBtnCount: document.getElementById('batchSubmitBtnCount'),
+    batchSubmitStatusTip: document.getElementById('batchSubmitStatusTip'),
+    outlookSearchInput: document.getElementById('outlookSearchInput'),
+    outlookTotalCountBadge: document.getElementById('outlookTotalCountBadge'),
+    refreshOutlookBtn: document.getElementById('refreshOutlookBtn'),
     outlookModal: document.getElementById('outlookModal'),
     outlookForm: document.getElementById('outlookForm'),
 
@@ -1257,65 +1276,447 @@ Verification Link: ${m.verification_link || 'none'}`;
     }
   });
 
-  // ==================== 4. Outlook 矩阵模块 ====================
-  async function loadOutlookData() {
-    try {
-      const res = await api('/api/outlook/accounts');
-      if (res.success) {
-        state.outlookAccounts = res.data || [];
-        renderOutlookTable();
-      }
-    } catch (e) {}
+  // ==================== 4. Outlook 矩阵模块 (含批量导入与快速提取) ====================
+  const DEFAULT_MICROSOFT_CLIENT_ID = '9e5f94bc-e8a4-4e73-b8be-63364c29d753';
+  const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const SAMPLE_OUTLOOK_LINE = 'MichelenaRosich405@outlook.com----GyehZl1D----9e5f94bc-e8a4-4e73-b8be-63364c29d753----M.C530_BAY.0.U.MsaArtifacts.-CsTvkNSQyZO15gg3Y9zBaOF7rO6S96UIPtWl!B46NQfLDo21hCgFzoRaBpmlVjQocldM6P3hZ79wI2qTX5d5kudyd0ROJFo3*du9crhF!cWRNMugPMkRxz1jXpllZiaUkMgnHW5tB07Er2Q3XS7AmMBCLcW!bBoykgpTunTuMBZvWg66NmPvFKm37Ho3DUDLqYAIpa6C4vzBPqeJOoEBfu6o6YQNl5t8LtCuKyfc4YuyXgZIvJHhbYZCM55njBMoYDSV*P2*ep*jZaqkZVfYGNvDwsoLAmBKpxc5L2*PRX8lJuSKWLmJBDnIn9*t1YFqUoBxWDiMKSVYqM7Q2fMDiX81s*VxQp9mluljYP*XuIwLUoNtQdP1PNWTxN!LHHOxfmGODkx5EpGMenIqNPQDgIcRqNnPJ6eFm9Osd666repO1yId7nPsu0gg1vVapRrZkTBbpWuW0XtWDwt*iKCuUUQ$';
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
-  function renderOutlookTable() {
-    if (state.outlookAccounts.length === 0) {
-      dom.outlookTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">暂无 Outlook 账号，点击右上角添加</td></tr>';
+  // 客户端智能解析单行账号格式
+  function parseOutlookLineClient(line) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return null;
+
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      try {
+        const obj = JSON.parse(trimmed);
+        const email = (obj.email || obj.username || obj.mail || '').trim().toLowerCase();
+        const password = (obj.password || obj.pwd || '').trim();
+        const clientId = (obj.client_id || obj.clientId || DEFAULT_MICROSOFT_CLIENT_ID).trim();
+        const refreshToken = (obj.refresh_token || obj.refreshToken || obj.token || '').trim();
+        const remark = (obj.remark || obj.note || '').trim();
+        const valid = Boolean(email && email.includes('@') && refreshToken);
+        return {
+          email,
+          password,
+          client_id: clientId || DEFAULT_MICROSOFT_CLIENT_ID,
+          refresh_token: refreshToken,
+          remark,
+          valid,
+          error: !valid ? '缺少邮箱或 Refresh Token' : undefined
+        };
+      } catch (e) {}
+    }
+
+    let parts = [];
+    if (trimmed.includes('----')) {
+      parts = trimmed.split('----').map(s => s.trim());
+    } else if (trimmed.includes('---')) {
+      parts = trimmed.split('---').map(s => s.trim());
+    } else if (trimmed.includes('::')) {
+      parts = trimmed.split('::').map(s => s.trim());
+    } else if (trimmed.includes('|')) {
+      parts = trimmed.split('|').map(s => s.trim());
+    } else if (trimmed.includes('\t')) {
+      parts = trimmed.split('\t').map(s => s.trim());
+    } else if (trimmed.includes(',') && !trimmed.includes(';')) {
+      parts = trimmed.split(',').map(s => s.trim());
+    } else {
+      parts = trimmed.split(/\s+/).map(s => s.trim());
+    }
+
+    parts = parts.filter(Boolean);
+    if (parts.length === 0) return null;
+
+    let email = '';
+    let password = '';
+    let clientId = '';
+    let refreshToken = '';
+    let remark = '';
+
+    const emailIdx = parts.findIndex(p => EMAIL_REGEX.test(p) || p.includes('@'));
+    if (emailIdx !== -1) {
+      email = parts[emailIdx].toLowerCase();
+      parts.splice(emailIdx, 1);
+    }
+
+    const uuidIdx = parts.findIndex(p => UUID_REGEX.test(p));
+    if (uuidIdx !== -1) {
+      clientId = parts[uuidIdx];
+      parts.splice(uuidIdx, 1);
+    }
+
+    const tokenIdx = parts.findIndex(p => p.length >= 50 || p.startsWith('M.') || p.includes('MsaArtifacts'));
+    if (tokenIdx !== -1) {
+      refreshToken = parts[tokenIdx];
+      parts.splice(tokenIdx, 1);
+    } else if (parts.length > 0) {
+      let maxIdx = 0;
+      for (let i = 1; i < parts.length; i++) {
+        if (parts[i].length > parts[maxIdx].length) maxIdx = i;
+      }
+      if (parts[maxIdx].length > 25) {
+        refreshToken = parts[maxIdx];
+        parts.splice(maxIdx, 1);
+      }
+    }
+
+    if (!clientId) {
+      clientId = DEFAULT_MICROSOFT_CLIENT_ID;
+    }
+
+    if (parts.length > 0) {
+      password = parts[0];
+      parts.splice(0, 1);
+    }
+    if (parts.length > 0) {
+      remark = parts.join(' | ');
+    }
+
+    const valid = Boolean(email && email.includes('@') && refreshToken);
+    let error;
+    if (!email || !email.includes('@')) {
+      error = '未识别到有效邮箱';
+    } else if (!refreshToken) {
+      error = '未识别到 Refresh Token';
+    }
+
+    return {
+      email,
+      password,
+      client_id: clientId,
+      refresh_token: refreshToken,
+      remark,
+      valid,
+      error
+    };
+  }
+
+  // 实时更新批量解析预览
+  function updateBatchPreview() {
+    const rawText = dom.batchOutlookTextarea ? dom.batchOutlookTextarea.value : '';
+    const lines = rawText.split('\n');
+    const parsedItems = [];
+    let validCount = 0;
+    let invalidCount = 0;
+
+    if (dom.batchLineCountIndicator) {
+      const activeLineCount = lines.filter(l => l.trim()).length;
+      dom.batchLineCountIndicator.textContent = `共 ${activeLineCount} 行有效输入`;
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line || line.startsWith('#') || line.startsWith('//')) continue;
+      const parsed = parseOutlookLineClient(line);
+      if (parsed) {
+        if (parsed.valid) {
+          validCount++;
+        } else {
+          invalidCount++;
+        }
+        parsedItems.push({ ...parsed, lineNum: i + 1 });
+      }
+    }
+
+    state.parsedBatchAccounts = parsedItems.filter(p => p.valid);
+
+    if (dom.batchValidCount) dom.batchValidCount.textContent = validCount;
+    if (dom.batchInvalidCount) dom.batchInvalidCount.textContent = invalidCount;
+    if (dom.batchPreviewCount) dom.batchPreviewCount.textContent = parsedItems.length;
+
+    if (dom.btnSubmitBatchImport) {
+      dom.btnSubmitBatchImport.disabled = validCount === 0;
+      if (dom.batchSubmitBtnCount) {
+        dom.batchSubmitBtnCount.textContent = validCount > 0 ? `(${validCount} 个账号)` : '';
+      }
+    }
+
+    if (!dom.batchPreviewTableBody) return;
+
+    if (parsedItems.length === 0) {
+      dom.batchPreviewTableBody.innerHTML = '<tr><td colspan="7" class="text-center py-4 text-muted">请在上方粘贴数据，将在此实时预览解析结果</td></tr>';
       return;
     }
 
-    dom.outlookTableBody.innerHTML = state.outlookAccounts.map(a => `
+    dom.batchPreviewTableBody.innerHTML = parsedItems.map(p => `
       <tr>
-        <td><strong>${a.email}</strong></td>
-        <td><code>${a.client_id.substring(0, 8)}...</code></td>
-        <td><span class="tag tag-category">${a.group_name || '默认'}</span></td>
-        <td><span class="tag tag-active">${a.status}</span></td>
-        <td>${a.remark || '-'}</td>
-        <td>${new Date(a.created_at).toLocaleDateString()}</td>
+        <td class="text-muted">${p.lineNum}</td>
+        <td><strong>${escapeHtml(p.email || '-')}</strong></td>
+        <td><code>${escapeHtml(p.password ? p.password : '(无密码)')}</code></td>
+        <td><code>${escapeHtml(p.client_id ? p.client_id.substring(0, 8) + '...' : '-')}</code></td>
+        <td><div class="cell-token-preview" title="${escapeHtml(p.refresh_token)}">${escapeHtml(p.refresh_token ? p.refresh_token.substring(0, 24) + '...' : '-')}</div></td>
+        <td>${escapeHtml(p.remark || '-')}</td>
         <td>
-          <button class="btn-sm btn-outline text-danger" onclick="deleteOutlookAccount(${a.id})">删除</button>
+          ${p.valid
+            ? '<span class="tag tag-active" style="font-size:11px;">✅ 有效</span>'
+            : `<span class="tag tag-danger" style="font-size:11px;" title="${escapeHtml(p.error || '')}">⚠️ ${escapeHtml(p.error || '异常')}</span>`
+          }
         </td>
       </tr>
     `).join('');
   }
 
+  // 加载 Outlook 列表
+  async function loadOutlookData() {
+    try {
+      const q = state.outlookFilterQuery ? `?q=${encodeURIComponent(state.outlookFilterQuery)}` : '';
+      const res = await api(`/api/outlook/accounts${q}`);
+      if (res.success) {
+        state.outlookAccounts = res.data || [];
+        renderOutlookTable();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  // 渲染 Outlook 表格
+  function renderOutlookTable() {
+    if (!dom.outlookTableBody) return;
+
+    if (dom.outlookTotalCountBadge) {
+      dom.outlookTotalCountBadge.textContent = `${state.outlookAccounts.length} 个账号`;
+    }
+
+    if (state.outlookAccounts.length === 0) {
+      dom.outlookTableBody.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-muted">暂无 Outlook 账号，点击上方「⚡ 批量导入账号」快速导入</td></tr>';
+      return;
+    }
+
+    dom.outlookTableBody.innerHTML = state.outlookAccounts.map(a => `
+      <tr>
+        <td>
+          <div class="account-email-cell">
+            <strong>${escapeHtml(a.email)}</strong>
+            <button type="button" class="btn-sm btn-icon" onclick="copyText('${escapeHtml(a.email)}', '邮箱地址')" title="复制邮箱">📋</button>
+          </div>
+        </td>
+        <td>
+          <div class="account-password-cell">
+            <span class="pwd-text" id="pwd-val-${a.id}">${a.password ? '••••••••' : '<span class="text-muted">(无)</span>'}</span>
+            ${a.password ? `
+              <button type="button" class="btn-sm btn-icon" onclick="togglePasswordVisibility(${a.id}, '${escapeHtml(a.password)}')" title="查看/隐藏明文">👁️</button>
+              <button type="button" class="btn-sm btn-icon" onclick="copyText('${escapeHtml(a.password)}', '登录密码')" title="复制密码">📋</button>
+            ` : ''}
+          </div>
+        </td>
+        <td><code>${escapeHtml(a.client_id ? a.client_id.substring(0, 8) + '...' : '-')}</code></td>
+        <td><span class="tag tag-category">${escapeHtml(a.group_name || '默认')}</span></td>
+        <td><span class="tag tag-active">🟢 正常</span></td>
+        <td>${escapeHtml(a.remark || '-')}</td>
+        <td>${a.updated_at ? new Date(a.updated_at).toLocaleDateString() : (a.created_at ? new Date(a.created_at).toLocaleDateString() : '-')}</td>
+        <td>
+          <div class="account-action-buttons">
+            <button type="button" class="btn-sm btn-primary" onclick="testOutlookCode(${a.id}, '${escapeHtml(a.email)}')" title="一键读取最新邮件验证码">⚡ 查收验证码</button>
+            <button type="button" class="btn-sm btn-secondary" onclick="copyFullOutlookLine(${a.id})" title="复制配置格式">📋 复制</button>
+            <button type="button" class="btn-sm btn-outline text-danger" onclick="deleteOutlookAccount(${a.id})" title="删除账号">🗑️</button>
+          </div>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  // 查收最新验证码
+  window.testOutlookCode = async function (id, email) {
+    if (dom.codeResultModal) dom.codeResultModal.classList.add('show');
+    if (dom.codeResultContent) {
+      dom.codeResultContent.innerHTML = `
+        <div class="loading-spinner">
+          <div style="font-size:1.8rem;margin-bottom:0.5rem;">⚡</div>
+          <div>正在通过微软 Graph API 连接 ${email} 收件箱并提取验证码...</div>
+        </div>
+      `;
+    }
+
+    try {
+      const res = await api(`/api/outlook/accounts/${id}/code`);
+      if (res.success && res.data) {
+        const d = res.data;
+        if (d.code) {
+          dom.codeResultContent.innerHTML = `
+            <div style="font-size:14px;color:var(--text-muted);">已成功从 Outlook 最新邮件中提取验证码：</div>
+            <div class="big-code-display">${d.code}</div>
+            <div style="margin-bottom:1rem;">
+              <button class="btn btn-primary" onclick="copyText('${d.code}', '验证码')">📋 一键复制验证码</button>
+            </div>
+            ${d.link ? `<div style="margin-bottom:0.75rem;"><a href="${d.link}" target="_blank" class="btn-link">🔗 打开激活/确认链接 ↗</a></div>` : ''}
+            <div style="text-align:left;font-size:12px;color:var(--text-muted);background:var(--bg-tertiary);padding:10px;border-radius:6px;">
+              <div><b>发件人:</b> ${escapeHtml(d.sender || '未知')}</div>
+              <div><b>主题:</b> ${escapeHtml(d.subject || '无主题')}</div>
+              <div><b>时间:</b> ${escapeHtml(d.received_at || '刚刚')}</div>
+            </div>
+          `;
+        } else {
+          dom.codeResultContent.innerHTML = `
+            <div style="padding:1.5rem 0;color:var(--text-muted);">
+              <div style="font-size:2.5rem;margin-bottom:0.5rem;">📭</div>
+              <div>${escapeHtml(d.message || '收件箱暂未收到新验证码邮件')}</div>
+              <p style="font-size:12px;margin-top:6px;">请在平台点击发送验证码后稍候片刻重试。</p>
+            </div>
+          `;
+        }
+      } else {
+        dom.codeResultContent.innerHTML = `<div class="error-msg">${escapeHtml(res.message || '查询失败')}</div>`;
+      }
+    } catch (e) {
+      if (dom.codeResultContent) {
+        dom.codeResultContent.innerHTML = '<div class="error-msg">网络请求失败，请稍后重试</div>';
+      }
+    }
+  };
+
+  // 复制完整配置单行格式
+  window.copyFullOutlookLine = function (id) {
+    const acc = state.outlookAccounts.find(a => a.id === id);
+    if (!acc) return;
+    const line = `${acc.email}----${acc.password || ''}----${acc.client_id}----${acc.refresh_token}${acc.remark ? `----${acc.remark}` : ''}`;
+    copyText(line, '完整 Outlook 账号格式');
+  };
+
+  // 切换密码明文/暗文
+  window.togglePasswordVisibility = function (id, pwd) {
+    const el = document.getElementById(`pwd-val-${id}`);
+    if (!el) return;
+    if (el.textContent === '••••••••') {
+      el.textContent = pwd;
+    } else {
+      el.textContent = '••••••••';
+    }
+  };
+
+  // 删除 Outlook 账号
   window.deleteOutlookAccount = async function (id) {
     if (!confirm('确定删除该 Outlook 账号？')) return;
     const res = await api(`/api/outlook/accounts/${id}`, { method: 'DELETE' });
     if (res.success) {
-      showToast('已删除');
+      showToast('已删除账号');
       loadOutlookData();
     }
   };
 
-  dom.outlookForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const payload = {
-      email: document.getElementById('outlookEmailInput').value.trim(),
-      client_id: document.getElementById('outlookClientIdInput').value.trim(),
-      refresh_token: document.getElementById('outlookRefreshTokenInput').value.trim(),
-      password: document.getElementById('outlookPasswordInput').value.trim(),
-      remark: document.getElementById('outlookRemarkInput').value.trim()
-    };
-    const res = await api('/api/outlook/accounts', { method: 'POST', body: payload });
-    if (res.success) {
-      showToast('Outlook 账号已添加');
-      dom.outlookModal.classList.remove('show');
+  // 搜索框过滤绑定
+  if (dom.outlookSearchInput) {
+    dom.outlookSearchInput.addEventListener('input', (e) => {
+      state.outlookFilterQuery = e.target.value.trim();
       loadOutlookData();
-    } else {
-      alert(res.message || '添加失败');
-    }
-  });
+    });
+  }
+
+  // 刷新按钮
+  if (dom.refreshOutlookBtn) {
+    dom.refreshOutlookBtn.addEventListener('click', () => {
+      loadOutlookData();
+      showToast('已刷新 Outlook 账号列表');
+    });
+  }
+
+  // 批量导入弹窗控制
+  if (dom.batchOutlookModalBtn) {
+    dom.batchOutlookModalBtn.addEventListener('click', () => {
+      if (dom.batchOutlookModal) {
+        dom.batchOutlookModal.classList.add('show');
+        updateBatchPreview();
+      }
+    });
+  }
+
+  if (dom.btnFillBatchSample) {
+    dom.btnFillBatchSample.addEventListener('click', () => {
+      if (dom.batchOutlookTextarea) {
+        dom.batchOutlookTextarea.value = SAMPLE_OUTLOOK_LINE;
+        updateBatchPreview();
+        showToast('已填入标准导入示例');
+      }
+    });
+  }
+
+  if (dom.btnClearBatchInput) {
+    dom.btnClearBatchInput.addEventListener('click', () => {
+      if (dom.batchOutlookTextarea) {
+        dom.batchOutlookTextarea.value = '';
+        updateBatchPreview();
+      }
+    });
+  }
+
+  if (dom.batchOutlookTextarea) {
+    dom.batchOutlookTextarea.addEventListener('input', () => {
+      updateBatchPreview();
+    });
+  }
+
+  if (dom.btnSubmitBatchImport) {
+    dom.btnSubmitBatchImport.addEventListener('click', async () => {
+      if (!state.parsedBatchAccounts || state.parsedBatchAccounts.length === 0) return;
+      const syncToVault = dom.batchSyncVaultCheckbox ? dom.batchSyncVaultCheckbox.checked : true;
+
+      dom.btnSubmitBatchImport.disabled = true;
+      if (dom.batchSubmitStatusTip) dom.batchSubmitStatusTip.textContent = '正在分批导入数据库...';
+
+      try {
+        const res = await api('/api/outlook/batch-import', {
+          method: 'POST',
+          body: {
+            raw_text: dom.batchOutlookTextarea.value,
+            accounts: state.parsedBatchAccounts,
+            sync_to_vault: syncToVault
+          }
+        });
+
+        if (res.success) {
+          showToast(res.message || `成功导入 ${res.count} 个账号`);
+          if (dom.batchOutlookModal) dom.batchOutlookModal.classList.remove('show');
+          if (dom.batchOutlookTextarea) dom.batchOutlookTextarea.value = '';
+          updateBatchPreview();
+          loadOutlookData();
+          if (syncToVault) {
+            loadVaultData();
+            loadPlatformSummary();
+          }
+        } else {
+          alert(res.message || '导入失败');
+        }
+      } catch (err) {
+        alert('网络请求失败，请稍后重试');
+      } finally {
+        if (dom.btnSubmitBatchImport) dom.btnSubmitBatchImport.disabled = false;
+        if (dom.batchSubmitStatusTip) dom.batchSubmitStatusTip.textContent = '';
+      }
+    });
+  }
+
+  // 单个添加表单
+  if (dom.outlookForm) {
+    dom.outlookForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        email: document.getElementById('outlookEmailInput').value.trim(),
+        client_id: document.getElementById('outlookClientIdInput').value.trim(),
+        refresh_token: document.getElementById('outlookRefreshTokenInput').value.trim(),
+        password: document.getElementById('outlookPasswordInput').value.trim(),
+        remark: document.getElementById('outlookRemarkInput').value.trim()
+      };
+      const res = await api('/api/outlook/accounts', { method: 'POST', body: payload });
+      if (res.success) {
+        showToast('Outlook 账号已添加');
+        if (dom.outlookModal) dom.outlookModal.classList.remove('show');
+        loadOutlookData();
+      } else {
+        alert(res.message || '添加失败');
+      }
+    });
+  }
 
   // ==================== 5. 设置模块 ====================
   async function loadSettings() {
@@ -1379,6 +1780,13 @@ Verification Link: ${m.verification_link || 'none'}`;
       document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('show'));
       if (dom.mailIframeContainer) dom.mailIframeContainer.innerHTML = '';
     });
+  });
+
+  window.addEventListener('click', (e) => {
+    if (e.target && e.target.classList && e.target.classList.contains('modal-backdrop')) {
+      e.target.classList.remove('show');
+      if (dom.mailIframeContainer) dom.mailIframeContainer.innerHTML = '';
+    }
   });
 
   dom.openNewVaultModalBtn.addEventListener('click', () => {
