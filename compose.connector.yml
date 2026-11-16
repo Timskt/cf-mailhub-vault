@@ -1,0 +1,22 @@
+services:
+  connector:
+    build:
+      context: .
+      dockerfile: connector/Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "${MAILHUB_UID:-1000}:${MAILHUB_GID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      MAILHUB_SOURCES_FILE: /run/secrets/sources
+      CONNECTOR_TOKEN_FILE: /run/secrets/token
+    secrets: [sources, token]
+    tmpfs: ["/tmp"]
+secrets:
+  sources:
+    file: ./secrets/storage-sources.json
+  token:
+    file: ./secrets/connector-token

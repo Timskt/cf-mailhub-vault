@@ -1,0 +1,4783 @@
+{
+  "info": {
+    "name": "MailHub & Vault",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "设置 base_url / api_key。使用手动请求或选择明确授权的操作；不要直接 Run 整个集合，集合包含修改及删除。"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8787"
+    },
+    {
+      "key": "api_key",
+      "value": ""
+    },
+    {
+      "key": "idempotency_key",
+      "value": "",
+      "description": "每个显式逻辑操作生成并保存唯一键；仅同次请求重试复用，不可全集合共用。"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{api_key}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "发现",
+      "item": [
+        {
+          "name": "health · 服务存活检查",
+          "request": {
+            "method": "GET",
+            "description": "仅进程健康，不代表数据库、域名路由或微软授权健康。\n\n认证：公开。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/healthz",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "healthz"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "listEnabledDomains · 可用邮件域名",
+          "request": {
+            "method": "GET",
+            "description": "可用邮件域名\n\n认证：公开。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/domains",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "domains"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getCapabilities · 自动化能力与调用限制",
+          "request": {
+            "method": "GET",
+            "description": "自动化能力与调用限制\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/capabilities",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "capabilities"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "searchWorkspace · 跨平台、Outlook 和邮件搜索",
+          "request": {
+            "method": "GET",
+            "description": "分别最多返回 12/8/8 项；完整数据请使用对应分页列表。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/search",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "自动化",
+      "item": [
+        {
+          "name": "inspectMailbox · 诊断邮箱接入状态",
+          "request": {
+            "method": "POST",
+            "description": "按 email、vault_id 或唯一 platform 定位。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：只读；不访问微软",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/automation/mailbox",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "automation",
+                "mailbox"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@outlook.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "lookupVerification · 统一查收验证码与验证链接",
+          "request": {
+            "method": "POST",
+            "description": "CF 与 Outlook 统一返回 data；outcome=found 或 empty。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：Outlook 会刷新并保存令牌及连接状态；不标已读、不打开链接",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/automation/verification",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "automation",
+                "verification"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"since\": \"2026-11-15T00:00:00Z\",\n  \"sender\": \"auth\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "batchLookupVerification · 批量查收，逐项报告结果",
+          "request": {
+            "method": "POST",
+            "description": "每批 1–5 项。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：最多并行 2 个；同一邮箱串行；Outlook 刷新令牌和状态",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/automation/verification/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "automation",
+                "verification",
+                "batch"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"email\": \"user@example.com\",\n      \"since\": \"2026-11-15T00:00:00Z\",\n      \"sender\": \"auth\"\n    },\n    {\n      \"vault_id\": 1,\n      \"since\": \"2026-11-15T00:00:00Z\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "lookupCodeLegacy · 兼容取码接口",
+          "request": {
+            "method": "GET",
+            "description": "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：Outlook 刷新令牌及连接状态",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/external/code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "external",
+                "code"
+              ],
+              "query": [
+                {
+                  "key": "email",
+                  "value": "user@example.com",
+                  "description": "邮箱地址",
+                  "disabled": false
+                },
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "唯一平台名称，email 优先",
+                  "disabled": true
+                },
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "操作开始时刻（含时区）",
+                  "disabled": true
+                },
+                {
+                  "key": "sender",
+                  "value": "",
+                  "description": "发件人包含文本",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮件关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "registerPlatformMailbox · 原子分配邮箱并登记平台",
+          "request": {
+            "method": "POST",
+            "description": "先验证全部字段，再一次提交邮箱及账号；绑定邮箱永久保留。可指定 prefix；冲突时不新增任何记录。支持持久化 Idempotency-Key；网络超时后使用相同键及相同请求核对，若结果未知则查询台账，不得换键自动重执。需要 mailbox:write 和 vault:write 两项权限。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write, vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/external/register",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "external",
+                "register"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform_name\": \"Example\",\n  \"domain\": \"example.com\",\n  \"category\": \"开发服务\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "平台账号",
+      "item": [
+        {
+          "name": "listVaultAccounts · 分页筛选平台账号",
+          "request": {
+            "method": "GET",
+            "description": "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配邮箱且不区分大小写；响应 mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "搜索关键词",
+                  "disabled": true
+                },
+                {
+                  "key": "mailbox",
+                  "value": "",
+                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "disabled": true
+                },
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "精确平台名，不区分大小写",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "分类",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "手动登记状态",
+                  "disabled": true
+                },
+                {
+                  "key": "email_source",
+                  "value": "",
+                  "description": "邮箱来源",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "收件域名",
+                  "disabled": true
+                },
+                {
+                  "key": "has_code",
+                  "value": "",
+                  "description": "仅含历史验证码",
+                  "disabled": true
+                },
+                {
+                  "key": "triage",
+                  "value": "",
+                  "description": "需处理 / 待检查 / 已连接",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createVaultAccount · 登记平台账号",
+          "request": {
+            "method": "POST",
+            "description": "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。现有 CF 邮箱会被关联保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n附加条件：generate_email=true 或未提供非空 account_email 时需要 mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform_name\": \"Example\",\n  \"account_email\": \"user@example.com\",\n  \"email_source\": \"cf_domain\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "batchUpdateVaultAccounts · 批量整理平台账号",
+          "request": {
+            "method": "POST",
+            "description": "每批最多 100 项，ID 自动去重；任一账号不存在则整批 409，零修改。只设置明确字段，重复提交不会反向切换置顶。不能批量改邮箱或密码。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "batch"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\n    1,\n    2\n  ],\n  \"patch\": {\n    \"category\": \"开发服务\",\n    \"is_pinned\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "listPlatforms · 按平台汇总账号和待处理数",
+          "request": {
+            "method": "GET",
+            "description": "只有传 page 或 limit 时分页；未传则返回全部分组。统计基于当前筛选。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault/platforms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "platforms"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "24",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "搜索关键词",
+                  "disabled": true
+                },
+                {
+                  "key": "mailbox",
+                  "value": "",
+                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "disabled": true
+                },
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "精确平台名，不区分大小写",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "分类",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "手动登记状态",
+                  "disabled": true
+                },
+                {
+                  "key": "email_source",
+                  "value": "",
+                  "description": "邮箱来源",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "收件域名",
+                  "disabled": true
+                },
+                {
+                  "key": "has_code",
+                  "value": "",
+                  "description": "仅含历史验证码",
+                  "disabled": true
+                },
+                {
+                  "key": "triage",
+                  "value": "",
+                  "description": "需处理 / 待检查 / 已连接",
+                  "disabled": true
+                },
+                {
+                  "key": "sort",
+                  "value": "",
+                  "description": "排序",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getVaultStats · 工作区业务统计",
+          "request": {
+            "method": "GET",
+            "description": "工作区业务统计\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault/stats",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "stats"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getVaultAccount · 读取完整平台账号",
+          "request": {
+            "method": "GET",
+            "description": "包括 password 与 totp_secret。自动化发现账号请优先使用分页列表。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "updateVaultAccount · 编辑平台账号",
+          "request": {
+            "method": "PUT",
+            "description": "沿用现有行为，未提供字段保留原值。更新 CF 关联邮箱保护状态。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remark\": \"由自动化更新\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteVaultAccount · 删除平台台账记录",
+          "request": {
+            "method": "DELETE",
+            "description": "删除登记记录并调整邮箱关联；不会删除 Outlook 池账号。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "toggleVaultPin · 切换账号置顶",
+          "request": {
+            "method": "POST",
+            "description": "每次调用反转状态；重试可能再次反转。自动化推荐 batchUpdateVaultAccounts 设置 is_pinned。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/:id/pin",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                ":id",
+                "pin"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "lookupVaultCode · 查收台账账号验证码",
+          "request": {
+            "method": "GET",
+            "description": "查收台账账号验证码\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：保存最近验证码；Outlook 刷新令牌及状态",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault/:id/code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                ":id",
+                "code"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "操作开始时刻（含时区）",
+                  "disabled": true
+                },
+                {
+                  "key": "sender",
+                  "value": "",
+                  "description": "发件人包含文本",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮件关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "exportVault · 导出完整平台台账",
+          "request": {
+            "method": "GET",
+            "description": "上限一万条，含密码及 2FA；下载 JSON。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/vault/export",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "export"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "importVault · 导入平台台账",
+          "request": {
+            "method": "POST",
+            "description": "按不区分大小写的平台名、邮箱、用户名去重，已有记录跳过。CF 地址自动保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/import",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "import"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accounts\": [\n    {\n      \"platform_name\": \"Example\",\n      \"account_email\": \"user@example.com\",\n      \"email_source\": \"cf_domain\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "自建邮箱",
+      "item": [
+        {
+          "name": "listMailboxes · 分页查询邮箱与使用情况",
+          "request": {
+            "method": "GET",
+            "description": "分页查询邮箱与使用情况\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "地址、用途或平台",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "保留状态",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "域名",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "generateMailbox · 分配单个邮箱",
+          "request": {
+            "method": "POST",
+            "description": "duration_minutes=0 或 -1、或 is_permanent=true 表示永久；否则 1–525600 分钟。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/generate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                "generate"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"example.com\",\n  \"duration_minutes\": 60,\n  \"remark\": \"开发测试\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "previewMailboxBatch · 预览跨域名批量邮箱",
+          "request": {
+            "method": "POST",
+            "description": "按域名轮流分配，每批最多 100。返回计划应原样传给 createMailboxBatch。预览不预占地址。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：只读预览，不保留地址",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/batch-preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                "batch-preview"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domains\": [\n    \"example.com\",\n    \"mail.example.com\"\n  ],\n  \"count\": 10,\n  \"prefix\": \"signup\",\n  \"duration_minutes\": 60\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "createMailboxBatch · 原子创建邮箱预览计划",
+          "request": {
+            "method": "POST",
+            "description": "任一地址冲突整批失败；超时后按地址查询再决定是否重试，不能直接重新生成预览。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                "batch"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mailboxes\": [\n    {\n      \"domain\": \"example.com\",\n      \"prefix\": \"signup-01-a1b2c3d4\",\n      \"duration_minutes\": 60,\n      \"is_permanent\": false,\n      \"remark\": \"开发测试\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "getMailbox · 读取邮箱保留配置",
+          "request": {
+            "method": "GET",
+            "description": "读取邮箱保留配置\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "updateMailboxRemark · 更新邮箱用途",
+          "request": {
+            "method": "PATCH",
+            "description": "更新邮箱用途\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remark\": \"自动化任务 A\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "lookupMailboxCode · 查收自建邮箱验证码",
+          "request": {
+            "method": "GET",
+            "description": "查收自建邮箱验证码\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id/code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id",
+                "code"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "操作开始时刻（含时区）",
+                  "disabled": true
+                },
+                {
+                  "key": "sender",
+                  "value": "",
+                  "description": "发件人包含文本",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮件关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "extendMailbox · 延长邮箱有效期",
+          "request": {
+            "method": "POST",
+            "description": "从当前有效期与当前时间较晚者延长；重复请求会重复加时。永久邮箱返回 400。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id/extend",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id",
+                "extend"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"minutes\": 60\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "toggleMailboxPermanent · 切换永久保留",
+          "request": {
+            "method": "POST",
+            "description": "绑定台账的邮箱不可取消永久保护；每次调用反转，不可盲目重试。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id/toggle-permanent",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id",
+                "toggle-permanent"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "linkMailboxVault · 关联匹配的平台账号",
+          "request": {
+            "method": "POST",
+            "description": "台账必须已经使用同一 CF 地址；关联后永久保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id/link-vault",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id",
+                "link-vault"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"vault_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "disableMailbox · 停用邮箱并清理未置顶邮件",
+          "request": {
+            "method": "DELETE",
+            "description": "保留过期地址记录以拒收后续投递；绑定台账时禁止操作。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailboxes/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailboxes",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "域名邮件",
+      "item": [
+        {
+          "name": "listDomainMail · 分页搜索域名邮件",
+          "request": {
+            "method": "GET",
+            "description": "分页搜索域名邮件\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "recipient",
+                  "value": "",
+                  "description": "收件地址",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "收件域名",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "主题、发件人、正文、验证码",
+                  "disabled": true
+                },
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "只返回指定时间之后的邮件",
+                  "disabled": true
+                },
+                {
+                  "key": "unread",
+                  "value": "",
+                  "description": "仅未读",
+                  "disabled": true
+                },
+                {
+                  "key": "verification",
+                  "value": "",
+                  "description": "仅已识别验证内容",
+                  "disabled": true
+                },
+                {
+                  "key": "folder",
+                  "value": "",
+                  "description": "默认 all",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "邮件分类",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getDomainMail · 读取邮件正文",
+          "request": {
+            "method": "GET",
+            "description": "保持旧默认行为；AI 摘要/数据同步建议显式 mark_read=false。HTML 为不可信邮件内容，须隔离渲染。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：默认标为已读；mark_read=false 不写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                ":id"
+              ],
+              "query": [
+                {
+                  "key": "mark_read",
+                  "value": "false",
+                  "description": "false 时只读，不修改已读状态",
+                  "disabled": false
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "downloadDomainMailRaw · 下载 CF 原始邮件",
+          "request": {
+            "method": "GET",
+            "description": "下载原始 .eml 文件，强制附件下载、nosniff、no-store，不标记已读。需配置 MAIL_OBJECTS 且该邮件已保存原文；历史邮件或未配置时 404 MAIL_OBJECT_UNAVAILABLE，存在引用但对象丢失时 503 MAIL_OBJECT_MISSING。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/:id/raw",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                ":id",
+                "raw"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "downloadDomainMailAttachment · 下载 CF 邮件附件",
+          "request": {
+            "method": "GET",
+            "description": "attachment 使用邮件详情 attachments[].id（零基序号字符串）。从 R2 原始邮件解析附件，强制二进制附件下载，不标记已读。没有原文/附件返回 404；对象引用丢失返回 503。不要把附件作为可信 HTML 执行。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/:id/attachments/:attachment",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                ":id",
+                "attachments",
+                ":attachment"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "attachment",
+                  "value": "REPLACE_ATTACHMENT",
+                  "description": "attachment，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "updateDomainMail · 整理邮件状态或分类",
+          "request": {
+            "method": "PATCH",
+            "description": "整理邮件状态或分类\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_read\": true,\n  \"is_archived\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteDomainMail · 删除邮件",
+          "request": {
+            "method": "DELETE",
+            "description": "删除本系统保存的邮件记录；不可恢复。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "batchUpdateMail · 批量整理邮件",
+          "request": {
+            "method": "POST",
+            "description": "每批最多 100 个 ID；不存在的 ID 跳过，changed 返回实际匹配数；不删除邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                "batch"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\n    1,\n    2\n  ],\n  \"patch\": {\n    \"is_archived\": true\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "listMailRecipients · 按收件人聚合邮件",
+          "request": {
+            "method": "GET",
+            "description": "最多 300 个收件人，按未读数与最近来信排序；不是分页全量导出。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/recipients",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                "recipients"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "地址搜索",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "域名",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "cleanExpiredMail · 清理到期临时邮件",
+          "request": {
+            "method": "POST",
+            "description": "保护置顶、永久邮箱及 CF 台账绑定地址，清理符合保留策略的邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/cf-mails/clean",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "cf-mails",
+                "clean"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "规则",
+      "item": [
+        {
+          "name": "listMailRules · 读取收件规则",
+          "request": {
+            "method": "GET",
+            "description": "最多 50 条，按 priority、id 升序；只执行首条启用且匹配全部条件的规则。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createMailRule · 新增收件规则",
+          "request": {
+            "method": "POST",
+            "description": "新增收件规则\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"简报归档\",\n  \"sender_contains\": \"newsletter@\",\n  \"archive\": true,\n  \"action_category\": \"newsletter\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updateMailRule · 完整编辑收件规则",
+          "request": {
+            "method": "PUT",
+            "description": "完整替换规则字段；未传字段恢复默认。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"简报归档\",\n  \"sender_contains\": \"newsletter@\",\n  \"archive\": true,\n  \"enabled\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteMailRule · 删除收件规则",
+          "request": {
+            "method": "DELETE",
+            "description": "历史邮件已执行的动作保持不变。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "previewDraftRule · 预览草稿规则",
+          "request": {
+            "method": "POST",
+            "description": "预览草稿规则\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：只读预览",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules/preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules",
+                "preview"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"简报归档\",\n  \"sender_contains\": \"newsletter@\",\n  \"archive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "previewSavedRule · 预览已保存规则",
+          "request": {
+            "method": "POST",
+            "description": "最多最新 100 封，返回 total、limited、revision。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：只读预览",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules/:id/preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules",
+                ":id",
+                "preview"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "applyMailRule · 应用已预览的规则",
+          "request": {
+            "method": "POST",
+            "description": "仅处理 ids 中仍匹配的邮件；规则内容变更返回 409，必须重新预览。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mail-rules/:id/apply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mail-rules",
+                ":id",
+                "apply"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ids\": [\n    1\n  ],\n  \"revision\": \"REPLACE_WITH_PREVIEW_REVISION\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Outlook",
+      "item": [
+        {
+          "name": "listOutlookAccounts · 分页查询 Outlook 池",
+          "request": {
+            "method": "GET",
+            "description": "列表不含密码/Refresh Token。检查续期时还需 token_refresh_status，不能只看 active。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮箱、备注、分组或平台",
+                  "disabled": true
+                },
+                {
+                  "key": "group_id",
+                  "value": "",
+                  "description": "分组 ID",
+                  "disabled": true
+                },
+                {
+                  "key": "tag_id",
+                  "value": "",
+                  "description": "标签 ID",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "管理状态",
+                  "disabled": true
+                },
+                {
+                  "key": "auth_status",
+                  "value": "",
+                  "description": "上次收件检查状态",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "saveOutlookAccount · 保存 Outlook 凭据",
+          "request": {
+            "method": "POST",
+            "description": "同邮箱更新；Client ID 须属于该 Refresh Token。保存后需要检查连接。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@outlook.com\",\n  \"client_id\": \"11111111-2222-4333-8444-555555555555\",\n  \"refresh_token\": \"REPLACE_WITH_REFRESH_TOKEN\",\n  \"group_id\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "getOutlookAccount · 读取完整 Outlook 配置",
+          "request": {
+            "method": "GET",
+            "description": "读取完整 Outlook 配置\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "updateOutlookAccount · 编辑 Outlook 配置",
+          "request": {
+            "method": "PUT",
+            "description": "邮箱不可修改；省略字段保留原值。更新授权凭据会重置检查和续期状态。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remark\": \"自动化任务专用\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteOutlookAccount · 删除托管 Outlook 配置",
+          "request": {
+            "method": "DELETE",
+            "description": "保留平台台账和真实微软邮箱，台账随后显示邮箱未接入。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "exportOutlookAccounts · 导出选定 Outlook 凭据",
+          "request": {
+            "method": "GET",
+            "description": "导出选定 Outlook 凭据\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/export",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "ids",
+                  "value": "1,2",
+                  "description": "1–100 个逗号分隔 ID",
+                  "disabled": false
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "previewOutlookImport · 脱敏预览 Outlook 导入",
+          "request": {
+            "method": "POST",
+            "description": "脱敏预览 Outlook 导入\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：只读；隐藏密码及令牌",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/parse-preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "parse-preview"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_text\": \"user@outlook.com----password----11111111-2222-4333-8444-555555555555----REPLACE_WITH_REFRESH_TOKEN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "importOutlookAccounts · 批量导入 Outlook",
+          "request": {
+            "method": "POST",
+            "description": "四段文本、CSV、JSON、逐行 JSON；每批 200 条/1 MiB。默认 skip，sync_to_vault 默认 true。逐批提交，可能部分成功；失败后先核对并以 skip 重试。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/batch-import",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "batch-import"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_text\": \"user@outlook.com----password----11111111-2222-4333-8444-555555555555----REPLACE_WITH_REFRESH_TOKEN\",\n  \"duplicate_mode\": \"skip\",\n  \"sync_to_vault\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "batchOutlookAccounts · 批量操作 Outlook",
+          "request": {
+            "method": "POST",
+            "description": "check 最多 10 个且逐项报告；其他动作最多 50 个。move 需 group_id，tag/untag 需 tag_id。不存在的 ID 跳过。delete 只删除托管配置。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/batch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                "batch"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"check\",\n  \"ids\": [\n    1\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "checkOutlookConnection · 实际检查微软邮件权限",
+          "request": {
+            "method": "POST",
+            "description": "读取邮件以验证连接；授权撤销需重新授权，自动续期不能绕过微软撤销。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：访问微软并保存令牌与健康状态",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/check",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "check"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "lookupOutlookCode · 查收 Outlook 验证内容",
+          "request": {
+            "method": "GET",
+            "description": "收件箱/垃圾箱先各读取 10 封，必要时扩大到各 25 封；不标记已读。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：刷新令牌及连接状态",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "code"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "操作开始时刻（含时区）",
+                  "disabled": true
+                },
+                {
+                  "key": "sender",
+                  "value": "",
+                  "description": "发件人包含文本",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮件关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listOutlookMail · 按文件夹查询 Outlook 邮件",
+          "request": {
+            "method": "GET",
+            "description": "按文件夹查询 Outlook 邮件\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：刷新令牌及连接状态；不标已读",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/emails",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "emails"
+              ],
+              "query": [
+                {
+                  "key": "folder",
+                  "value": "",
+                  "description": "默认 inbox",
+                  "disabled": true
+                },
+                {
+                  "key": "top",
+                  "value": "20",
+                  "description": "每页数量",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "关键词",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "将 next_cursor 原样传回，文件夹保持一致",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "sendOutlookMail · 发送 Outlook 邮件",
+          "request": {
+            "method": "POST",
+            "description": "需 API admin 权限及微软 Mail.Send；202 仅表示微软受理，不保证投递。to/cc/bcc 合计 ≤100，纯文本正文 ≤100000 字符，附件 ≤10、解码后合计 ≤3 MiB，整包 ≤5 MiB。与 reply 共用每账号 60 秒 10 次/900 秒 60 次固定窗口（首次尝试起算）；校验通过后计数，失败也占用，成功幂等回放不占。超限为 429 SEND_RATE_LIMITED，读取 retry_after/Retry-After。无自动重发；delivery_unknown=true 时先查已发送邮件，PERMISSION_REQUIRED 时重新授权 send_mail=true。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：202\n副作用：向真实收件人发送邮件；刷新令牌；计入账号发送尝试限额。须先取得使用者发信授权。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/send",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "send"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to\": [\n    \"recipient@example.com\"\n  ],\n  \"subject\": \"已确认的通知\",\n  \"body\": \"这是一封经使用者确认发送的纯文本邮件。\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "replyOutlookMail · 回复 Outlook 邮件",
+          "request": {
+            "method": "POST",
+            "description": "直接回复原消息，不支持另设收件人或 reply-all。无附件需 Mail.Send；有附件需 Mail.ReadWrite 和 Mail.Send，失败可能返回 draft_id，草稿保留供核对。202 仅表示受理；正文/附件/5 MiB 请求上限与 send 相同。send+reply 每账号共用 60 秒 10 次、900 秒 60 次固定窗口；超限返回 429 SEND_RATE_LIMITED 及 Retry-After。delivery_unknown 时不自动重发或删除草稿。messageId 须 URL 编码。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：202\n副作用：回复真实邮件；有附件时先创建回复草稿再发送；刷新令牌并计入与 send 共享的账号限额。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/messages/:messageId/reply",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "messages",
+                ":messageId",
+                "reply"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "messageId",
+                  "value": "REPLACE_MESSAGEID",
+                  "description": "messageId，作为路径段时 URL 编码"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"已收到，谢谢。\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "getOutlookMail · 读取 Outlook 正文和附件目录",
+          "request": {
+            "method": "GET",
+            "description": "读取 Outlook 正文和附件目录\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：刷新令牌及连接状态；不标已读",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/messages/:message",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "messages",
+                ":message"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "message",
+                  "value": "REPLACE_MESSAGE",
+                  "description": "message，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "deleteOutlookMail · 删除真实微软邮件",
+          "request": {
+            "method": "DELETE",
+            "description": "操作真实微软邮箱；已删除文件夹中的删除可能进一步移除邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/messages/:message",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "messages",
+                ":message"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "message",
+                  "value": "REPLACE_MESSAGE",
+                  "description": "message，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "downloadOutlookAttachment · 下载 Outlook 附件",
+          "request": {
+            "method": "GET",
+            "description": "流式二进制下载；Content-Type 由附件类型决定，正文不是 JSON，附件不写入 D1。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：刷新令牌及连接状态",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/messages/:message/attachments/:attachment",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "messages",
+                ":message",
+                "attachments",
+                ":attachment"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "message",
+                  "value": "REPLACE_MESSAGE",
+                  "description": "message，作为路径段时 URL 编码"
+                },
+                {
+                  "key": "attachment",
+                  "value": "REPLACE_ATTACHMENT",
+                  "description": "attachment，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "getOutlookRenewal · 查询自动续期执行与待处理数",
+          "request": {
+            "method": "GET",
+            "description": "查询自动续期执行与待处理数\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/renewal",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "renewal"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "runOutlookRenewal · 执行一轮到期账号续期",
+          "request": {
+            "method": "POST",
+            "description": "受设置中的批次数限制，只处理到期账号；完成后读取 getOutlookRenewal 核对结果。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/renewal/run",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "renewal",
+                "run"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Outlook 分组",
+      "item": [
+        {
+          "name": "listOutlookGroups · 读取 Outlook 分组",
+          "request": {
+            "method": "GET",
+            "description": "读取 Outlook 分组\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/groups",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "groups"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createOutlookGroup · 新增分组",
+          "request": {
+            "method": "POST",
+            "description": "新增分组\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/groups",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "groups"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"开发\",\n  \"color\": \"#2563eb\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updateOutlookGroup · 编辑分组",
+          "request": {
+            "method": "PUT",
+            "description": "编辑分组\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/groups/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "groups",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"生产\",\n  \"color\": \"#2563eb\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteOutlookGroup · 删除分组",
+          "request": {
+            "method": "DELETE",
+            "description": "默认分组 1 不可删除；账号移回默认分组。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/groups/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "groups",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listOutlookTags · 读取 Outlook 标签",
+          "request": {
+            "method": "GET",
+            "description": "读取 Outlook 标签\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/tags",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "tags"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createOutlookTag · 新增标签",
+          "request": {
+            "method": "POST",
+            "description": "新增标签\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/tags",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "tags"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"开发\",\n  \"color\": \"#2563eb\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updateOutlookTag · 编辑标签",
+          "request": {
+            "method": "PUT",
+            "description": "编辑标签\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/tags/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "tags",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"生产\",\n  \"color\": \"#2563eb\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteOutlookTag · 删除标签",
+          "request": {
+            "method": "DELETE",
+            "description": "删除标签及其关联，账号保留。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/tags/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "tags",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "域名设置",
+      "item": [
+        {
+          "name": "listDomainSettings · 查询域名与投递配置",
+          "request": {
+            "method": "GET",
+            "description": "查询域名与投递配置\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/domains",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "domains"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "addDomain · 接入新的邮件域名",
+          "request": {
+            "method": "POST",
+            "description": "最多 100 个，规范化大小写和国际化域名；仍需在 Cloudflare 配置 DNS 与 Email Routing。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/domains",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "domains"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"mail.example.com\",\n  \"remark\": \"开发邮箱\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updateDomain · 启停域名、设置默认域名",
+          "request": {
+            "method": "PUT",
+            "description": "启停域名、设置默认域名\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/domains/:domain",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "domains",
+                ":domain"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "domain",
+                  "value": "REPLACE_DOMAIN",
+                  "description": "domain，作为路径段时 URL 编码"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": true,\n  \"is_default\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "checkDomainDns · 检查邮件 DNS",
+          "request": {
+            "method": "POST",
+            "description": "不会修改 DNS 或 Cloudflare 路由；DNS 正常仍需实际投递验证。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：查询 DNS 并保存诊断状态",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/domains/:domain/check",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "domains",
+                ":domain",
+                "check"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "domain",
+                  "value": "REPLACE_DOMAIN",
+                  "description": "domain，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "设置",
+      "item": [
+        {
+          "name": "getSettings · 读取工作区偏好",
+          "request": {
+            "method": "GET",
+            "description": "读取工作区偏好\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "updateSettings · 更新工作区偏好",
+          "request": {
+            "method": "PUT",
+            "description": "完整更新偏好；省略字段恢复默认（前缀空、15 天、每轮 5）。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"default_prefix\": \"tmp\",\n  \"mail_retention_days\": 15,\n  \"token_refresh_batch\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "getApiKey · 读取当前主 API Key",
+          "request": {
+            "method": "GET",
+            "description": "当前主密钥具有全部业务管理权限；未配置时返回空字符串。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/api-key",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "api-key"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "changeAdminPassword · 修改管理员密码",
+          "request": {
+            "method": "POST",
+            "description": "更换密码并使其他 Cookie 会话失效；当前会话重新签发。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/password",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "password"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"new_password\": \"REPLACE_WITH_NEW_PASSWORD\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "会话",
+      "item": [
+        {
+          "name": "loginAdmin · 管理员登录",
+          "request": {
+            "method": "POST",
+            "description": "每 IP 15 分钟最多 10 次尝试；成功通过 Set-Cookie 返回会话。脚本推荐使用 API Key。\n\n认证：公开。\n必要 grants（全部）：无\n成功状态：200\n副作用：签发 HttpOnly 会话 Cookie",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"password\": \"REPLACE_WITH_ADMIN_PASSWORD\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "logoutAdmin · 退出当前会话",
+          "request": {
+            "method": "POST",
+            "description": "退出当前会话\n\n认证：公开。\n必要 grants（全部）：无\n成功状态：200\n副作用：清除请求方会话 Cookie",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getSession · 查询当前 Cookie 会话",
+          "request": {
+            "method": "GET",
+            "description": "只识别 Cookie；API Key 不会使 authenticated 变为 true。\n\n认证：公开。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "startOutlookOAuth · 发起微软浏览器授权",
+          "request": {
+            "method": "POST",
+            "description": "需要有效管理员 Cookie 和自有微软应用；在浏览器打开返回的 url，由用户完成微软授权。默认申请 offline_access/Mail.ReadWrite/User.Read；send_mail=true 额外申请 Mail.Send。旧令牌不会自动获得发信权限，需要重新授权。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/oauth/start",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "oauth",
+                "start"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"group_id\": 1,\n  \"send_mail\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "finishOutlookOAuth · 微软 OAuth 回调",
+          "request": {
+            "method": "GET",
+            "description": "由微软回调，不要手工调用；需要原始管理员会话 Cookie。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：消费一次性状态并保存授权",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/oauth/callback",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "oauth",
+                "callback"
+              ],
+              "query": [
+                {
+                  "key": "state",
+                  "value": "",
+                  "description": "OAuth state",
+                  "disabled": true
+                },
+                {
+                  "key": "code",
+                  "value": "",
+                  "description": "微软授权码",
+                  "disabled": true
+                },
+                {
+                  "key": "error",
+                  "value": "",
+                  "description": "微软取消/错误",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "权限与审计",
+      "item": [
+        {
+          "name": "listScopedApiKeys · 分页读取 API Key 元数据",
+          "request": {
+            "method": "GET",
+            "description": "仅管理员登录会话；包含已撤销记录，绝不返回完整 key 或哈希。最近使用时间最多每五分钟更新一次。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/api-keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "api-keys"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createScopedApiKey · 创建细分权限 API Key",
+          "request": {
+            "method": "POST",
+            "description": "密钥明文仅在创建响应中提供（有效期内相同幂等请求可回放该响应）；列表仅元数据，数据库仅存哈希。默认 30 天到期、最多 365 天。最多 1000 条记录（含已撤销）。emails/platforms 精确匹配且都设置时须同时满足；不支持通配符。admin scope 仍受资源限制，不能访问会话专属路由。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：201\n副作用：修改业务数据\n响应包含凭据。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/api-keys",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "api-keys"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"验证码自动化\",\n  \"scopes\": [\n    \"verify:read\"\n  ],\n  \"restrictions\": {\n    \"emails\": [\n      \"user@example.com\"\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "revokeScopedApiKey · 撤销 API Key",
+          "request": {
+            "method": "DELETE",
+            "description": "立即失效，记录仍保留供审计；重复撤销已存在记录成功，不存在返回 404。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/api-keys/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "api-keys",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_ID",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listAuditLog · 分页查询审计记录",
+          "request": {
+            "method": "GET",
+            "description": "仅返回白名单元数据；不记录密码、令牌和邮件正文。status=0 表示写入前的操作意图，不能据此认定业务成功。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/audit",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "action",
+                  "value": "",
+                  "description": "精确操作名",
+                  "disabled": true
+                },
+                {
+                  "key": "actor_type",
+                  "value": "",
+                  "description": "actor_type",
+                  "disabled": true
+                },
+                {
+                  "key": "before",
+                  "value": "",
+                  "description": "不包含此时刻",
+                  "disabled": true
+                },
+                {
+                  "key": "after",
+                  "value": "",
+                  "description": "包含此时刻",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "purgeAuditLog · 分批清理历史审计记录",
+          "request": {
+            "method": "DELETE",
+            "description": "before 必须早于当前时间；每次最多清理 1000 条，清理行为自身会被审计。has_more 表示本轮已到上限；下一批是新的显式操作，不能用相同幂等键反复回放同一批结果。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/audit",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "audit"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"before\": \"2026-01-01T00:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "凭据保护",
+      "item": [
+        {
+          "name": "getCredentialProtection · 查询凭据加密与明文迁移状态",
+          "request": {
+            "method": "GET",
+            "description": "enabled 表示当前 CREDENTIAL_ENCRYPTION_KEY（或 STORAGE_ENCRYPTION_KEY 回退）至少 32 字符；不代表所有旧行已经加密。plaintext_records 按记录计数；不会暴露密钥或明文。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/credentials",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "credentials"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "rekeyCredentials · 分批迁移或轮换凭据加密",
+          "request": {
+            "method": "POST",
+            "description": "每页最多 50 条；oauth_sessions 使用字符串游标，其他表使用整数，原样续传 data.cursor 直至 complete=true。并发变更的行计入 skipped，应核查后从头重扫。需先配置当前密钥及可选 CREDENTIAL_ENCRYPTION_KEY_PREVIOUS；此 API 不修改环境密钥。跨全部表完成并核实后再移除旧密钥。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/credentials/rekey",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "credentials",
+                "rekey"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"accounts\",\n  \"cursor\": 0\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "事件通知",
+      "item": [
+        {
+          "name": "listWebhooks · 读取事件订阅",
+          "request": {
+            "method": "GET",
+            "description": "最多 50 条；destination 仅为源站，不返回完整路径、查询串或签名密钥。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createWebhook · 创建签名事件订阅",
+          "request": {
+            "method": "POST",
+            "description": "需要已配置至少 32 字符的凭据加密密钥；最多 50 条。签名 secret 仅创建时返回（相同有效幂等请求可回放）。include_code 默认 false，通知仅白名单元数据，主题/验证码/链接仅在显式开启后发送。详见开发者指南的原始字节验签和持久化去重示例。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：201\n副作用：修改业务数据\n响应包含凭据。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"收件通知\",\n  \"url\": \"https://hooks.example.org/mailhub\",\n  \"events\": [\n    \"mail.received\",\n    \"code.extracted\"\n  ],\n  \"include_code\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "setWebhookEnabled · 启停事件订阅",
+          "request": {
+            "method": "PATCH",
+            "description": "仅修改 enabled，省略时为 false；暂停后调度器逐批取消尚未完成的投递，已开始的 HTTP 请求无法撤回。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deleteWebhook · 删除事件订阅",
+          "request": {
+            "method": "DELETE",
+            "description": "删除配置，调度器随后分批取消待投递记录；历史保留，已发出的请求无法撤回。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listWebhookDeliveries · 分页查询事件投递记录",
+          "request": {
+            "method": "GET",
+            "description": "固定每页 30 条，不接受自定义 limit；不含 payload 或 lease_token。next_attempt/lease_until 为 Unix 毫秒。自动投递最多 8 次，每轮最多 10 条、并发 2。delivered/dead/cancelled 终态保留 30 天，六小时清理任务每轮最多删除 500 条。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks/deliveries",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks",
+                "deliveries"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "webhook_id",
+                  "value": "",
+                  "description": "订阅 ID",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "status",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "retryWebhookDelivery · 手动重排失败事件",
+          "request": {
+            "method": "POST",
+            "description": "仅 dead/cancelled 且订阅仍启用时允许；重置 attempts=0 并复用 delivery ID。已成功或正在投递时返回 409；接收端必须按 delivery ID 持久化去重。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/webhooks/deliveries/:id/retry",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "webhooks",
+                "deliveries",
+                ":id",
+                "retry"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_ID",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "便携业务备份",
+      "item": [
+        {
+          "name": "getBackupManifest · 查询便携业务备份范围与限制",
+          "request": {
+            "method": "GET",
+            "description": "11 张业务表，全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/backups/manifest",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "manifest"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "exportRedactedBackup · 下载脱敏业务清单",
+          "request": {
+            "method": "GET",
+            "description": "默认正向白名单脱敏，不包含密码、TOTP、令牌、主题、正文或验证码；manifest.redacted=true、restorable=false，只用于检查和统计，不能恢复。响应为下载 JSON，没有 success/data 包装。导出前后业务 revision 不一致返回 409 BACKUP_CHANGED。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/backups/export",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "export"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "exportEncryptedBackup · 下载含凭据的加密业务备份",
+          "request": {
+            "method": "POST",
+            "description": "显式确认后以 PBKDF2-SHA256（100000 次、随机 16 字节 salt）派生 AES-256-GCM 密钥，随机 12 字节 IV，规范化 envelope header 作为 AAD。明文 ≤1 MiB/1000 行，Base64 封装会增大文件。响应是加密 envelope，没有 success/data 包装。大于 256 KiB 的响应不能缓存幂等回放，重复相同键会返回 IDEMPOTENCY_UNKNOWN。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：读取全部范围内的业务及凭据并生成加密下载；记录审计。\n响应包含凭据。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/backups/export",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "export"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"include_credentials\": true,\n  \"confirm\": \"EXPORT_CREDENTIALS\",\n  \"passphrase\": \"REPLACE_WITH_BACKUP_PASSPHRASE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "dryRunBackup · 校验备份并预览恢复",
+          "request": {
+            "method": "POST",
+            "description": "dry-run 与 preview 为同一处理器。校验格式/schema/哈希、字段、主键/唯一约束及关联；明文上传只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。restorable=true 仅表示文件可恢复，不保证当前实例具备条件，应检查 confirmation_token 和 manifest.restore_available。示例仅展示结构，backup 必须整体替换为真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/backups/dry-run",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "dry-run"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup\": {\n    \"format\": \"mailhub-backup-encrypted\",\n    \"version\": 1,\n    \"encryption\": {\n      \"algorithm\": \"AES-256-GCM\",\n      \"kdf\": \"PBKDF2-SHA256\",\n      \"iterations\": 100000,\n      \"salt\": \"AAAAAAAAAAAAAAAAAAAAAA==\",\n      \"iv\": \"AAAAAAAAAAAAAAAA\"\n    },\n    \"ciphertext\": \"UkVQTEFDRV9XSVRIX0VYUE9SVEVEX0NJUEhFUlRFWFQ=\"\n  },\n  \"passphrase\": \"REPLACE_WITH_BACKUP_PASSPHRASE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "previewBackupRestore · 校验备份并预览恢复",
+          "request": {
+            "method": "POST",
+            "description": "dry-run 与 preview 为同一处理器。校验格式/schema/哈希、字段、主键/唯一约束及关联；明文上传只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。restorable=true 仅表示文件可恢复，不保证当前实例具备条件，应检查 confirmation_token 和 manifest.restore_available。示例仅展示结构，backup 必须整体替换为真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/backups/preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "preview"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup\": {\n    \"format\": \"mailhub-backup-encrypted\",\n    \"version\": 1,\n    \"encryption\": {\n      \"algorithm\": \"AES-256-GCM\",\n      \"kdf\": \"PBKDF2-SHA256\",\n      \"iterations\": 100000,\n      \"salt\": \"AAAAAAAAAAAAAAAAAAAAAA==\",\n      \"iv\": \"AAAAAAAAAAAAAAAA\"\n    },\n    \"ciphertext\": \"UkVQTEFDRV9XSVRIX0VYUE9SVEVEX0NJUEhFUlRFWFQ=\"\n  },\n  \"passphrase\": \"REPLACE_WITH_BACKUP_PASSPHRASE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "restoreBackup · 确认并恢复便携业务备份",
+          "request": {
+            "method": "POST",
+            "description": "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：替换 11 张业务表及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": false
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/backups/restore",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "backups",
+                "restore"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"backup\": {\n    \"format\": \"mailhub-backup-encrypted\",\n    \"version\": 1,\n    \"encryption\": {\n      \"algorithm\": \"AES-256-GCM\",\n      \"kdf\": \"PBKDF2-SHA256\",\n      \"iterations\": 100000,\n      \"salt\": \"AAAAAAAAAAAAAAAAAAAAAA==\",\n      \"iv\": \"AAAAAAAAAAAAAAAA\"\n    },\n    \"ciphertext\": \"UkVQTEFDRV9XSVRIX0VYUE9SVEVEX0NJUEhFUlRFWFQ=\"\n  },\n  \"passphrase\": \"REPLACE_WITH_BACKUP_PASSPHRASE\",\n  \"confirmation_token\": \"REPLACE_WITH_PREVIEW_TOKEN\",\n  \"confirm\": \"RESTORE_BACKUP\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "存储管理",
+      "item": [
+        {
+          "name": "getStorageStatus · 查询数据源与同步任务",
+          "request": {
+            "method": "GET",
+            "description": "仅管理员 Cookie；连接密钥脱敏。job 为存储协调器状态，不同阶段字段不同，详见 DATABASES.md。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "addStorageSource · 验证并添加外部数据源",
+          "request": {
+            "method": "POST",
+            "description": "http 方式需要 endpoint/token；Redis 直连 transport=redis 需要 redis_url。测试连接后加密保存。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sources",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sources"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"MySQL\",\n  \"kind\": \"mysql\",\n  \"source\": \"mysql-main\",\n  \"endpoint\": \"https://connector.example.com\",\n  \"token\": \"REPLACE_WITH_CONNECTOR_TOKEN_32_CHARS\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updateStorageSource · 更新数据源名称和凭据",
+          "request": {
+            "method": "PATCH",
+            "description": "更换服务器应添加新数据源后同步。空 token 保留原密钥。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sources/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sources",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_ID",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"生产副本\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "removeStorageSource · 移除闲置连接",
+          "request": {
+            "method": "DELETE",
+            "description": "移除配置不删除远程数据；活动数据源和进行中的任务受保护。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sources/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sources",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_ID",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "checkStorageSource · 测试数据源连接",
+          "request": {
+            "method": "POST",
+            "description": "测试数据源连接\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：执行适配器连接与能力检查",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sources/:id/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sources",
+                ":id",
+                "health"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_ID",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "startStorageSync · 后台同步或切换数据库",
+          "request": {
+            "method": "POST",
+            "description": "默认 mode=switch、auto_switch=true。snapshot 是该时刻副本，不是持续双写；调用后轮询 getStorageStatus 核对完成或失败。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sync",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sync"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_id\": \"REPLACE_WITH_SOURCE_ID\",\n  \"mode\": \"snapshot\",\n  \"auto_switch\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retryStorageSync · 恢复中断同步",
+          "request": {
+            "method": "POST",
+            "description": "恢复中断同步\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sync/retry",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sync",
+                "retry"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "cancelStorageSync · 取消同步并继续原数据源",
+          "request": {
+            "method": "POST",
+            "description": "取消同步并继续原数据源\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/settings/storage/sync/cancel",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "settings",
+                "storage",
+                "sync",
+                "cancel"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "兼容接口",
+      "item": [
+        {
+          "name": "generateMailboxLegacy · 兼容随机邮箱",
+          "request": {
+            "method": "POST",
+            "description": "兼容平铺响应，无 success/data 包装。expiration 支持 60m、1h、1d、permanent。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox/generate",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox",
+                "generate"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"example.com\",\n  \"expiration\": \"1h\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "customMailboxLegacy · 兼容自定义邮箱",
+          "request": {
+            "method": "POST",
+            "description": "兼容平铺响应，无 success/data 包装。expiration 支持 60m、1h、1d、permanent。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox/custom",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox",
+                "custom"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"example.com\",\n  \"prefix\": \"signup\",\n  \"expiration\": \"1h\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "listMailLegacy · 兼容邮件列表",
+          "request": {
+            "method": "GET",
+            "description": "最多最近 50 封；无 success/data 包装。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/emails/list",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emails",
+                "list"
+              ],
+              "query": [
+                {
+                  "key": "address",
+                  "value": "",
+                  "description": "必填，或使用 mailbox 别名",
+                  "disabled": true
+                },
+                {
+                  "key": "mailbox",
+                  "value": "",
+                  "description": "address 的别名",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "关键词",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getMailLegacy · 兼容邮件正文",
+          "request": {
+            "method": "GET",
+            "description": "无 success/data 包装；新接入推荐 getDomainMail。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：标记邮件已读",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/emails/view/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "emails",
+                "view",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

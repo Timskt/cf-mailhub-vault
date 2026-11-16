@@ -2,5 +2,16 @@ node_modules
 .wrangler
 dist
 .env
+.env.*
+.dev.vars*
 wrangler.toml
 .DS_Store
+output/
+.playwright-cli/
+.mailhub-*.json
+
+# Vite output is built before preview/deploy. Sources live in web/ and root index.html.
+public/
+secrets/
+__pycache__/
+*.py[cod]

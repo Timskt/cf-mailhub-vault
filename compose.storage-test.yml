@@ -1,0 +1,44 @@
+# Isolated, loopback-only integration databases. Never use these test credentials in production.
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: mailhub-test-only
+      MYSQL_DATABASE: mailhub_test
+    ports: ["127.0.0.1:33077:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pmailhub-test-only"]
+      interval: 2s
+      timeout: 2s
+      retries: 50
+    tmpfs: ["/var/lib/mysql"]
+  mongodb:
+    image: mongo:8
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports: ["127.0.0.1:27077:27017"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"localhost:27017\"}]}) }; if (!db.hello().isWritablePrimary) quit(1)'" ]
+      interval: 2s
+      timeout: 5s
+      retries: 50
+    tmpfs: ["/data/db", "/data/configdb"]
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    ports: ["127.0.0.1:6387:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs: ["/data"]
+  redis-b:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always", "--maxmemory-policy", "noeviction"]
+    ports: ["127.0.0.1:6388:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs: ["/data"]

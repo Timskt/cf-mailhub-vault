@@ -1,0 +1,5 @@
+extends:
+  - recommended
+rules:
+  # Checked-in artifacts target local development; served documents use their request origin.
+  no-server-example.com: off

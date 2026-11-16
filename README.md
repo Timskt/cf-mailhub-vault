@@ -1,114 +1,171 @@
-# 📬 MailHub & Vault
+# MailHub & Vault
 
-<p align="center">
-  <b>全能邮箱矩阵与平台账号资产中心 (All-in-One Multi-Source Mailbox & Platform Account Vault)</b><br>
-  完全基于 Cloudflare 原生无服务器架构（Workers + D1 + Email Routing）· 100% 零服务器 · 零成本运行 · 隐私自托管
-</p>
+自托管的多域名收件箱、Outlook 工作区与平台账号台账。一个 Cloudflare Worker 提供前端、API、邮件接收和定时任务，默认使用 D1，支持切换到自托管 MySQL、MongoDB、Redis，并自动同步数据。前端采用 React、Tailwind CSS 与 shadcn/ui。
 
----
+## 可以做什么
 
-## ✨ 为什么打造这个项目？
+- **数据源热切换**：同类型多个实例、不同数据库类型、不同服务器，后台全量复制与增量追平，逐页校验后切换；中断恢复、保留原数据集。支持 D1 → MySQL → MongoDB → Redis → D1。[接入与迁移文档](docs/DATABASES.md)。
 
-在日常出海或批量测试过程中，很多开发者都面临这些痛点：
-1. **邮箱分散混乱**：自建域名临时邮箱、微软 Outlook 邮箱、公共接码临时邮箱各用一套，收信找验证码极其繁琐；
-2. **账号资产遗忘**：在 OpenAI、Claude、Cursor、GitHub、Twitter 等平台注册了一堆账号，过几天根本记不清哪个平台用了哪个邮箱、密码是什么、是否存活；
-3. **收码效率低下**：注册或找回密码时，需要反复在网页间跳转、手动刷新邮件、翻看长篇内容去找 6 位验证码。
+- **多邮件域名**：面板添加、停用、设置默认域名、备注用途，检查 MX/SPF，查看最近实际收件时间；生成邮箱时选择域名。兼容已有 `CF_DOMAINS` 配置。
+- **Outlook 工作区**：自有微软应用 OAuth、文本/CSV/JSON 批量导入、完整 JSON 导出、编辑凭据、连接测试、真实授权状态、分组和标签，以及批量移组、加/移除标签、启停和删除托管配置。
+- **微软邮件阅读**：收件箱、垃圾箱、已删除、存档、已发送和全邮箱，搜索、分页、HTML/纯文本正文、附件下载、删除邮件。HTML 使用隔离 iframe，脚本和表单禁用，外部图片默认阻止。
+- **Outlook 发信与回复**：明确授权 `Mail.Send` 后发送纯文本邮件、回复与小附件；失败保留草稿，持久幂等保护重试，同一账号共享发送频率限制。HTTP 202 表示微软接受请求，不表示已送达。
+- **取码**：平台台账直接查收绑定的 CF 或 Outlook 邮箱；Outlook 检查最近 25 封收件箱和 25 封垃圾邮件，支持时间、发件人和关键词筛选，保存刷新后的令牌。授权失败与没有邮件分别反馈。
+- **临时邮箱生命周期**：随机或自定义前缀、有效期延长、永久保留、平台绑定保护。过期/停用邮箱拒收后续邮件；保留地址记录，避免 Catch-all 自动复活已停用地址。
+- **账号台账**：平台、邮箱来源、用户名、密码、2FA 信息、分类、状态和用途备注，置顶、服务端分页、域名与来源筛选、JSON 备份恢复。列表不返回密码、2FA 或 Outlook 令牌。
+- **批量管理与动态口令**：平台抽屉支持卡片/紧凑表格、跨页选择、批量分类/状态/备注/置顶和选中项导出；本地计算 TOTP、生成随机密码，邮件详情可反查关联账号。
+- **搜索与体验**：独立搜索防抖和请求顺序控制、数据库范围的全局搜索、桌面/手机布局、系统/浅色/深色主题、弹窗焦点管理与操作反馈。
+- **自动等待与夜间阅读**：前台按 5/10/15 秒退避轮询，后台暂停，验证码等待最多三分钟；HTML 邮件独立夜间显示，保留隔离和外部图片控制。
+- **自动化与运维**：带权限范围和有效期的 API Key、持久幂等请求、操作审计、签名 Webhook 与失败重试、定时 Outlook 续期、受保护邮件清理、可选 Telegram 通知，以及可重复浏览器 CI。
+- **凭据与备份**：账号密码、Outlook 令牌、TOTP 和 Webhook 连接字段加密写入，支持旧密钥过渡与分批重加密；提供加密业务便携备份、预览和隔离数据集恢复。[恢复范围与运维步骤](docs/BACKUP-RECOVERY.md)。
+- **原始邮件与附件**：可选私有 R2 绑定保存新到 CF 邮件的原始 EML，支持原文/附件下载与延迟回收；未配置 R2 时沿用原来的正文存储。
 
-**MailHub & Vault** 将「**多源邮箱矩阵**」与「**平台账号资产管理台账**」深度融合，同时吸收了顶流临时邮箱项目（如 `tempmail.jdyun.fun`、`cloudflare_temp_email`、`cf-outlook-email`）的交互精髓，打造一站式矩阵解决方案！
+“公共临时邮箱 / 外部邮箱”目前是台账来源标记，尚未接第三方收件服务。当前不提供 IMAP/POP3 服务或多用户隔离。Cloudflare 与微软的配额、权限和服务条款仍然适用，运行费用取决于实际用量。
 
----
+## 本地开发
 
-## 🔥 核心特性
+需要 Node.js 22+、pnpm 11。使用独立本地配置，不读取你的生产 `wrangler.toml`：
 
-- 🏢 **平台注册资产台账 (Vault)**
-  - 详细记录平台名称、官网链接、绑定邮箱、登录用户名、密码（支持脱敏与一键复制）、2FA 密钥、状态（正常/待验证/已封禁）、分类及注册代理 IP 记录。
-  - 支持一键导出 CSV 备份，随时本地归档。
-- ⚡ **杀手级联动：一键秒提平台验证码**
-  - 在平台列表中点击 **「⚡ 提取验证码」**，系统自动定位该平台绑定的邮箱，从最新邮件中智能提取 4~8 位数字/字母验证码与激活链接，直接大字号弹出并提供一键复制，彻底免去手动翻邮件的痛苦！
-- 📬 **自建 Cloudflare 域名 Catch-all 收信**
-  - 原生接入 Cloudflare Email Routing，无需任何额外服务器或开放 25 端口，全域收信直接触发 Worker 存储入库。
-  - 列表级突出显示验证码徽章（免进邮件即可复制）。
-  - 支持 DKIM / SPF 真实性鉴权校验徽章（🛡️ 已验真），防钓鱼欺诈。
-- 🔑 **微软 Outlook / Hotmail 批量账号托管**
-  - 集成 Microsoft Graph API，支持批量托管、自动定时续期 Refresh Token，免翻墙直接读取收件箱与垃圾箱。
-- 🛡️ **生命周期保护机制**
-  - 临时测试邮箱定期自动清理；一旦邮箱与平台账号绑定，系统自动将其锁定为永久受保护资产，绝不误删。
-- 🤖 **开放自动化 REST API**
-  - 专为 Python、Selenium、Playwright 自动化注册脚本设计，提供 `GET /api/external/code` 纯净接口，秒级回传最新验证码。
-- 🚀 **100% Serverless & pnpm 构建**
-  - 严格采用 pnpm 包管理，零磁盘浪费，单 Worker 整合前端与后端（Workers Assets 模式），秒级全球 CDN 部署。
-
----
-
-## 🛠️ 快速部署教程
-
-### 1. 前置准备
-- 一个托管在 Cloudflare 上的域名；
-- 本地安装了 Node.js（v18+）和 pnpm。
-
-### 2. 本地登录 Cloudflare 并一键部署
 ```bash
-# 克隆代码
-git clone https://github.com/Timskt/cf-mailhub-vault.git
-cd cf-mailhub-vault
+pnpm install --frozen-lockfile
+pnpm db:migrate:local
+pnpm dev:seed                 # 可选：仅向本地数据库写入虚构示例数据
+pnpm dev
+```
 
-# 1. 登录 Cloudflare（如已登录可跳过）
+打开 `http://localhost:8787`，本地管理员密码为 `local-mailhub-password`，本地 API Key 为 `local-mailhub-api-key`。这些值仅存在于 `wrangler.local.jsonc` 的开发配置。`.test` 域名不接收真实互联网邮件；示例微软令牌不能用于连接微软。
+
+```bash
+pnpm typecheck
+pnpm test                    # 实际本地 D1 + 模拟微软响应，不使用真实邮箱凭据
+pnpm build                   # 独立本地配置的 Worker dry-run，不发布
+pnpm exec playwright install chromium
+pnpm test:e2e                # 独立临时 D1、虚构数据；微软发送请求被模拟
+pnpm audit --prod --registry=https://registry.npmjs.org
+```
+
+## 首次部署
+
+自动方式：
+
+```bash
+pnpm install --frozen-lockfile
 pnpm exec wrangler login
-
-# 2. 执行一键部署脚本
-./deploy.sh
+bash deploy.sh 'example.com,mail.example.net' 'vault.example.com'
 ```
 
-按照终端提示输入您的域名（如 `example.com`）和前端访问域名（如 `vault.example.com`），脚本将自动完成 D1 数据库创建、表结构初始化并发布上线！
+脚本会运行检查，首次创建/复用 `mailhub-vault-db`，生成配置，通过 Workers Secrets 上传初始化凭据，执行**全部**数据库迁移，然后部署。密码使用隐藏输入；留空自动生成。首次凭据保存在权限为 `0600` 的 `.mailhub-initial-credentials.json`，不会打印到部署日志；保存到密码管理器后删除该文件。如果初次上传 Secrets 失败，`.mailhub-bootstrap.json` 会保留供重试。两个文件均被 Git 忽略。
 
-### 3. 配置 Cloudflare 邮件路由 (Email Routing)
-部署成功后，最后一步开启接收邮件：
-1. 登录 [Cloudflare 控制台](https://dash.cloudflare.com/) ➔ 进入您的托管域名；
-2. 点击左侧导航栏 **「电子邮件 (Email)」** ➔ **「电子邮件路由 (Email Routing)」** 并启用；
-3. 切换至 **「路由规则 (Routing rules)」**：
-   - 找到 **Catch-all 规则** ➔ 编辑；
-   - **操作 (Action)**：选择 **发送到 Worker (Send to Worker)**；
-   - **目标**：选择 **`cf-mailhub-vault`** 并保存。
+已有 `wrangler.toml` 时，脚本保留配置和 Secrets。若存在尚未完成的 `.mailhub-bootstrap.json`，会先恢复该次初始化上传。脚本只在你主动执行时修改生产资源。
 
----
+也可手动部署：
 
-## 📄 自动化 REST API 说明
-
-在请求头中携带 `X-API-Key: 你的API密钥` 即可调用：
-
-### 1. 获取指定邮箱或平台的最新验证码
 ```bash
-GET /api/external/code?email=xxx@yourdomain.com
-# 或根据平台模糊查询：
-GET /api/external/code?platform=OpenAI
-```
-**响应：**
-```json
-{
-  "success": true,
-  "code": "849201",
-  "link": "https://auth.openai.com/verify?token=xxx",
-  "subject": "Your OpenAI verification code",
-  "sender": "noreply@tm.openai.com",
-  "received_at": "2026-11-11 14:30:00"
-}
+cp wrangler.toml.example wrangler.toml
+pnpm exec wrangler d1 create mailhub-vault-db
+# 将数据库 ID 写入 wrangler.toml；设置邮件域名和可选面板访问域名。
+pnpm exec wrangler secret put ADMIN_PASSWORD
+pnpm exec wrangler secret put COOKIE_SECRET
+pnpm exec wrangler secret put STORAGE_ENCRYPTION_KEY # 至少 32 位随机字符
+pnpm exec wrangler secret put API_KEY             # 可选：供自动化脚本使用
+pnpm exec wrangler d1 migrations apply DB --remote
+pnpm deploy
 ```
 
-### 2. 自动分配邮箱并登记新账号
+密码建议至少 10 位，COOKIE_SECRET 使用随机值。不要把 Secrets 写入 `[vars]`。`routes` 是 TOML 根级配置，需放在 `[assets]` 等表配置之前。面板访问域名和邮件接收域名是两个独立配置。
+
+## 接入多个邮件域名
+
+1. 在「域名管理」添加 `example.com`、`mail.example.net` 等域名，也可在部署变量 `CF_DOMAINS` 中用逗号列出初始域名。
+2. **对每个域名分别**在 Cloudflare 启用 Email Routing，按控制台要求添加 MX/TXT 等记录。
+3. 设置每个域名的 Catch-all 为「发送到 Worker」，目标选**同一个** `cf-mailhub-vault`。
+4. 回到面板检查 DNS，从其他邮箱发送测试邮件，确认显示实际收件时间。
+5. 选择默认域名；创建临时邮箱、在台账生成邮箱或自动化注册时，可以指定任一已启用域名。
+
+面板保存配置和 DNS 检查不会代替 Cloudflare 路由配置。DNS 就绪只代表查询到的 MX/SPF 满足检查条件；Catch-all 必须正确指向 Worker。停用域名后停止分配并拒绝新投递，已有邮件保留，仍可筛选查看。子域的 Email Routing 支持取决于 Cloudflare 控制台中对应的邮件路由配置。
+
+## Outlook 接入
+
+**已有 Refresh Token**：在 Outlook 工作区导入，Client ID 必须对应令牌的签发应用。标准文本格式：
+
+```text
+user@outlook.com----密码可空----Client ID UUID----完整 Refresh Token----可选备注
+```
+
+支持空密码、CSV 表头、制表符、TXT、JSON 数组和本系统导出的 JSON。每批最多 200 条 / 1 MiB，复杂密码/备注优先使用 JSON。预览只校验格式，不代表授权有效；导入后可批量测试连接。重复处理默认“跳过已有”，可选择“更新凭据与分组”。系统兼容旧版省略 Client ID 的数据，但兼容值不能保证适用于你的令牌，应优先明确填写原始 Client ID。
+
+**微软登录授权**：注册自己的 Microsoft Entra **Web 应用**，支持个人及组织账号；配置委派权限 `User.Read`、`Mail.ReadWrite` 与 `offline_access`，然后设置：
+
 ```bash
-POST /api/external/register
-Content-Type: application/json
-
-{
-  "platform_name": "Claude",
-  "password": "Password123!",
-  "category": "AI工具",
-  "remark": "美国住宅IP自动注册"
-}
+pnpm exec wrangler secret put MICROSOFT_CLIENT_ID
+pnpm exec wrangler secret put MICROSOFT_CLIENT_SECRET
 ```
 
----
+将「设置 → 微软授权接入」显示的地址加入该应用的 Web 重定向 URI，例如：`https://vault.example.com/api/outlook/oauth/callback`。在实际访问的面板域名发起授权，回调域名必须匹配。授权使用 PKCE，state 只可使用一次并绑定当前管理员会话。组织可能要求管理员同意；应用 Secret 过期需要更新。
 
-## 📜 开源协议
+每 15 分钟处理 1–8 个最早到期的账号。成功续期后安排约 6 小时再次刷新；队列积压时依次处理，临时故障按 15 分钟至 6 小时退避重试。请求包含 `offline_access`，微软返回的新 Refresh Token 会在继续操作前保存，并防止覆盖并发导入的新凭据。后台续期只刷新令牌，不读取邮件；页面分别显示连接状态、最近续期、下次尝试及失败原因。停用和明确要求重新授权的账号跳过；微软主动撤销授权或 SPA 令牌的固定期限不能靠定时任务无限延长。详见 [Outlook 续期说明](docs/OUTLOOK-RENEWAL.md)。
 
-本项目采用 [MIT](LICENSE) 协议开源。仅供学习交流与个人资产管理使用。
+删除托管配置不会删除微软账号，也保留平台台账。**邮件阅读器中的“删除邮件”会操作真实微软邮箱**；已删除文件夹内的邮件可能进一步移除。只有 Mail.Read 权限的历史令牌可以阅读，但删除会报告权限不足。
+
+## 自动化 API
+
+开发者中心包含 119 个 HTTP 操作的搜索目录、接口详情抽屉、cURL / JavaScript / Python 示例、工作流与邮箱接入诊断。设置中可创建有有效期、权限范围以及邮箱/平台限制的自动化密钥，按最小权限选择 `verify:read`、`mailbox:write`、`vault:read`、`vault:write` 或 `admin`。密钥、审计、备份、数据源、凭据和 Webhook 管理及微软 OAuth 要求有效管理员会话，`admin` 子密钥也不能代替会话。请求头支持 `X-API-Key` 或 `Authorization: Bearer`，不接受 URL 密钥；显式密钥鉴权优先于 Cookie。
+
+完整接入步骤见 [开发者指南](docs/API.md)。部署后提供 `/openapi.json`（OpenAPI 3.1）、`/postman.json`、`/llms.txt`、`/llms-full.txt`、`/api-doc.md`；保留 `/api-doc.json` 目录兼容。接口定义位于 `shared/api-contract.ts`，运行 `pnpm docs:generate` 更新仓库文档，`pnpm docs:check` 防止文档过期。
+
+[TypeScript 与 Python SDK](docs/SDK.md)提供接入诊断、查收/等待、登记、发送/回复及 Webhook 验签；源码分发、无第三方运行依赖。等待最多 180 秒，写入不自动重试，便于脚本和 AI 工具正确处理未知结果。
+
+新增统一查收 `POST /api/automation/verification`、批量查收 `/api/automation/verification/batch`（每批 5 项、逐项错误及重试建议）、邮箱诊断 `/api/automation/mailbox`、能力发现 `GET /api/capabilities`、原子批量整理 `POST /api/vault/batch`（最多 100 项）。域名邮件支持 `since` 增量查询及 `mark_read=false` 只读正文；响应携带 `X-Request-ID`。
+
+```bash
+curl 'https://vault.example.com/api/automation/verification' \
+  -H 'X-API-Key: YOUR_API_KEY' -H 'Content-Type: application/json' \
+  -d '{"email":"user@outlook.com","since":"2026-11-15T00:00:00Z","sender":"auth"}'
+
+curl 'https://vault.example.com/api/external/register' \
+  -H 'X-API-Key: YOUR_API_KEY' -H 'Content-Type: application/json' \
+  -d '{"platform_name":"Example","domain":"mail.example.net","remark":"开发测试"}'
+```
+
+统一查收在 JSON 中提供 `email`、`vault_id`、唯一的 `platform` 三者之一，可用 `since`（带时区的 ISO 8601）、`sender`、`q` 筛选。无结果返回 `data.outcome=empty`；授权或网络失败返回错误，不等同“暂无邮件”。建议固定操作开始时刻作为 since，每 10 秒轮询，最多 3 分钟。批次 HTTP 200 还须检查每项 success。自动登记、发送和恢复等写入支持持久化 `Idempotency-Key`；同一 Key 必须使用相同身份、路径和请求体。收到 `IDEMPOTENCY_UNKNOWN` 后先核对结果，不要自动换 Key 重做。具体支持范围见接口契约。
+
+旧版 `/api/mailbox/*`、`/api/emails/*` 保留响应形状，**现在也要求管理员 Cookie 或 API Key**，旧的无鉴权脚本需要补上请求头。台账、Outlook 账号、临时邮箱和 CF 邮件列表现在返回 `data/page/limit/total`，默认每页 30 条。
+
+## 从旧版升级与备份
+
+先保留现有 `wrangler.toml` 和 Secrets，备份 D1：
+
+```bash
+pnpm exec wrangler d1 export DB --remote --output=output/backup-before-upgrade.sql
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm exec wrangler d1 migrations apply DB --remote
+pnpm deploy
+```
+
+请先创建本地 `output/` 目录。0001/0002 使用 `IF NOT EXISTS`，兼容旧版直接用 `d1 execute` 初始化但没有迁移记录的部署。0003 添加授权健康状态、多域名、OAuth 和登录限流表，并为已有平台绑定邮箱补齐永久保护，不删除账号或邮件。0004 增加可切换数据集的元数据与行存储。要启用多数据源，还需按 [数据库部署文档](docs/DATABASES.md) 加入 STORAGE 绑定及加密 Secret；现有生产配置不会被脚本覆盖。后续使用 migrations apply，避免手工重复执行含 ALTER TABLE 的 0003。
+
+平台台账与 Outlook 可分别导出/恢复 JSON；这些文件包含完整凭据，请妥善保存。设置中的加密业务便携备份包含 11 张业务表及有限偏好，最多 1,000 行/1 MiB 明文，恢复需先预览，再写入新 D1 数据集、校验并切换，保留原数据集。它不含 R2 文件、完整协调器控制态、环境 Secrets 或认证/审计/事件记录；全站灾备还需要数据库原生备份与配套文件和密钥。[备份与恢复文档](docs/BACKUP-RECOVERY.md)列出具体步骤和边界。回退旧代码前先确认旧版接口鉴权与数据库兼容性，不要通过删除数据表来回退。
+
+## 数据与边界
+
+- 管理员 Cookie 有效期 7 天，HttpOnly / SameSite=Lax，HTTPS 下 Secure；修改密码使其他会话失效。历史 SHA-256 密码在成功登录时迁移至加盐 PBKDF2。未配置密码时关闭管理员访问，不提供默认生产密码。
+- 配置凭据加密密钥后，敏感字段加密入库；服务端仍需解密供授权用户使用，因此不是零知识密码管理器。原生备份与历史明文也需受控保管。密钥轮换和恢复依赖见备份文档。
+- 无 R2 时 CF 来信上限 2 MiB；配置私有 `MAIL_OBJECTS` R2 绑定后为 20 MiB，保存原始 EML 并按需解析附件。正文分别最多保存 500,000 字符。旧邮件不会补出未保存的原文。Outlook 附件通过微软读取，不存入应用数据库。
+- 永久邮箱、绑定平台的 CF 邮件、置顶邮件受自动/批量清理保护。显式删除单封邮件仍会删除该邮件。解除平台绑定后邮箱继续保持永久，若需清理，再手动取消永久状态。
+- SPF/DKIM 显示来自邮件头的报告，本程序不自行完成签名验证，不据此保证邮件真实。
+- Telegram Secrets 为 `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`，仅在你配置后推送 CF 新邮件提示。
+
+前端源码在 `web/`，`public/` 是 Vite 构建产物，不入库；所有预览与部署命令会先构建前端。数据库连接服务在 `connector/`，数据库接口和迁移协调器在 `src/storage/`。
+
+设计借鉴、功能差异与验证说明见 [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md)。所有新功能独立实现；项目许可证为 MIT。
+
+## 收件工作流
+
+支持域名来信自动分类、可预览的收件规则、邮件归档与批量处理，以及跨域名批量分配邮箱和用途记录。使用步骤、API 与数据兼容范围见 [收件规则与邮箱分配](docs/MAIL-WORKFLOWS.md)。
+
+## 平台账号概览
+
+按平台汇总账号、问题和待检查数量，用详情抽屉管理同平台的多账号。登记状态与邮箱连接状态分别显示；未接入 Outlook 账号池、停用、授权失效及续期失败提供对应的处理入口。详见 [平台账号与连接状态](docs/PLATFORM-ACCOUNTS.md)。

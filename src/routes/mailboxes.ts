@@ -1,190 +1,299 @@
-import { Hono } from 'hono';
-import type { Env, TempMailbox } from '../types';
-
+import { Hono } from "hono";
+import { lookupCode } from "../codes";
+import { allocateMailbox, normalizeDomain } from "../domains";
+import { createMailboxBatch, previewMailboxes } from "../mailbox-batches";
+import {
+  and,
+  collect,
+  db,
+  eq,
+  now,
+  oneOf,
+  remove,
+  search,
+  update,
+  type Filter,
+} from "../storage/client";
+import type { Env, TempMailbox } from "../types";
+import { choice, integer, invalid, object, since, text } from "../validation";
 const app = new Hono<{ Bindings: Env }>();
-
-// 1. 获取所有临时邮箱列表 (附带邮件总数与过期状态)
-app.get('/', async (c) => {
-  const q = c.req.query('q')?.trim().toLowerCase() || '';
-  const status = c.req.query('status') || 'all'; // all, active, permanent, expired
-
-  let sql = `
-    SELECT m.*, 
-           COUNT(c.id) AS mail_count
-    FROM temp_mailboxes m
-    LEFT JOIN cf_inbox_mails c ON LOWER(c.recipient) = LOWER(m.address)
-    WHERE 1=1
-  `;
-  const params: any[] = [];
-
-  if (q) {
-    sql += ' AND (LOWER(m.address) LIKE ? OR LOWER(m.remark) LIKE ? OR LOWER(m.associated_platform) LIKE ?)';
-    const wild = `%${q}%`;
-    params.push(wild, wild, wild);
-  }
-
-  sql += ' GROUP BY m.id ORDER BY m.is_pinned DESC, m.created_at DESC LIMIT 100';
-
-  const { results } = await c.env.DB.prepare(sql).bind(...params).all<any>();
-  const nowIso = new Date().toISOString();
-
-  let list = (results || []).map(r => {
-    const isExpired = Boolean(!r.is_permanent && r.expires_at && r.expires_at < nowIso);
-    let remainingSeconds = 0;
-    if (!r.is_permanent && r.expires_at) {
-      const diff = Math.floor((new Date(r.expires_at).getTime() - Date.now()) / 1000);
-      remainingSeconds = Math.max(0, diff);
-    }
-    return {
-      ...r,
-      is_expired: isExpired,
-      remaining_seconds: remainingSeconds
+app.get("/:id/code", async (c) => {
+  const mailbox = await db(c.env).first<TempMailbox>(
+    "temp_mailboxes",
+    eq("id", integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER)),
+  );
+  if (!mailbox) return c.json({ success: false, message: "邮箱不存在" }, 404);
+  const result = await lookupCode(c.env, mailbox.address, "cf_domain", {
+    since: since(c.req.query("since")),
+    sender: text(c.req.query("sender"), "发件人", 254),
+    keyword: text(c.req.query("q"), "关键词", 200),
+  });
+  return result.error
+    ? c.json({ success: false, message: result.error.message }, 400)
+    : c.json({ success: true, data: result.data });
+});
+app.get("/", async (c) => {
+  const q = text(c.req.query("q"), "搜索", 200).trim();
+  const status = choice(
+    c.req.query("status"),
+    "状态",
+    ["all", "active", "permanent", "expired"],
+    "all",
+  );
+  const domain = c.req.query("domain")
+    ? normalizeDomain(c.req.query("domain"))
+    : "";
+  const limit = integer(c.req.query("limit"), "每页数量", 1, 100, 30);
+  const page = integer(c.req.query("page"), "页码", 1, 100000, 1);
+  const expire: Filter = and(
+    eq("is_permanent", 0),
+    { field: "expires_at", op: "ne", value: "" },
+    { field: "expires_at", op: "dateLt", value: now() },
+  );
+  const active = and(eq("is_permanent", 0), { not: expire });
+  const where = and(
+    q ? search(q, "address", "remark", "associated_platform") : undefined,
+    domain ? eq("domain", domain) : undefined,
+    status === "expired"
+      ? expire
+      : status === "permanent"
+        ? eq("is_permanent", 1)
+        : status === "active"
+          ? active
+          : undefined,
+  );
+  const store = db(c.env);
+  const [rows, total, all, permanent, expired, activeCount] = await Promise.all(
+    [
+      store.select<TempMailbox>("temp_mailboxes", {
+        where,
+        order: [
+          ["is_pinned", "desc"],
+          ["id", "desc"],
+        ],
+        limit,
+        offset: (page - 1) * limit,
+      }),
+      store.count("temp_mailboxes", where),
+      store.count("temp_mailboxes"),
+      store.count("temp_mailboxes", eq("is_permanent", 1)),
+      store.count("temp_mailboxes", expire),
+      store.count("temp_mailboxes", active),
+    ],
+  );
+  const mails = await collect(store, "cf_inbox_mails", {
+    where: oneOf(
+      "recipient",
+      rows.map((m) => m.address),
+    ),
+    columns: ["recipient", "is_read", "created_at"],
+  });
+  const usage = new Map<
+    string,
+    { mail_count: number; unread_count: number; last_received_at: string }
+  >();
+  for (const m of mails) {
+    const stats = usage.get(String(m.recipient)) || {
+      mail_count: 0,
+      unread_count: 0,
+      last_received_at: "",
     };
-  });
-
-  if (status === 'active') {
-    list = list.filter(item => !item.is_expired && !item.is_permanent);
-  } else if (status === 'permanent') {
-    list = list.filter(item => Boolean(item.is_permanent));
-  } else if (status === 'expired') {
-    list = list.filter(item => item.is_expired);
+    stats.mail_count++;
+    if (!m.is_read) stats.unread_count++;
+    if (String(m.created_at) > stats.last_received_at)
+      stats.last_received_at = String(m.created_at);
+    usage.set(String(m.recipient), stats);
   }
-
-  return c.json({ success: true, data: list });
-});
-
-// 2. 自动生成新临时邮箱 (默认有效期 1 小时 / 60 分钟)
-app.post('/generate', async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const rawDomains = c.env.CF_DOMAINS || '439949.xyz';
-  const domains = rawDomains.split(',').map(d => d.trim()).filter(Boolean);
-  const targetDomain = body.domain && domains.includes(body.domain) ? body.domain : domains[0];
-
-  let prefix = body.prefix ? body.prefix.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '') : '';
-  if (!prefix) {
-    const basePrefix = c.env.DEFAULT_PREFIX ? `${c.env.DEFAULT_PREFIX}_` : 'tmp_';
-    const rand = Math.random().toString(36).substring(2, 8);
-    prefix = `${basePrefix}${rand}`;
-  }
-
-  const address = `${prefix}@${targetDomain}`.toLowerCase();
-  const durationMinutes = typeof body.duration_minutes === 'number' ? body.duration_minutes : 60; // 默认 60 分钟 (1小时)
-  const isPermanent = Boolean(body.is_permanent || durationMinutes <= 0);
-
-  let expiresAt = '';
-  if (!isPermanent) {
-    expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000).toISOString();
-  }
-
-  const remark = body.remark || '';
-  const associatedPlatform = body.associated_platform || '';
-
-  const res = await c.env.DB.prepare(
-    `INSERT INTO temp_mailboxes (
-      address, prefix, domain, expires_at, is_permanent, 
-      associated_platform, remark, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`
-  )
-    .bind(address, prefix, targetDomain, expiresAt, isPermanent ? 1 : 0, associatedPlatform, remark)
-    .run();
-
-  const id = res.meta.last_row_id;
-  const newMailbox = await c.env.DB.prepare('SELECT * FROM temp_mailboxes WHERE id = ?').bind(id).first<TempMailbox>();
-
   return c.json({
     success: true,
-    data: {
-      ...newMailbox,
-      remaining_seconds: isPermanent ? 0 : durationMinutes * 60,
-      is_expired: false
-    },
-    message: isPermanent ? '已生成永久邮箱' : `已生成临时邮箱，默认有效期 ${durationMinutes} 分钟`
+    total,
+    page,
+    limit,
+    summary: { total: all, permanent, expired, active: activeCount },
+    data: rows.map((m) => ({
+      ...m,
+      ...(usage.get(m.address) || {
+        mail_count: 0,
+        unread_count: 0,
+        last_received_at: "",
+      }),
+      is_expired: Boolean(
+        !m.is_permanent &&
+        m.expires_at &&
+        Date.parse(m.expires_at) <= Date.now(),
+      ),
+      remaining_seconds: m.is_permanent
+        ? 0
+        : Math.max(
+            0,
+            Math.floor((Date.parse(m.expires_at) - Date.now()) / 1000),
+          ),
+    })),
   });
 });
-
-// 3. 延长邮箱有效期 (默认延长 +60 分钟)
-app.post('/:id/extend', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json().catch(() => ({}));
-  const minutes = typeof body.minutes === 'number' ? body.minutes : 60;
-
-  const row = await c.env.DB.prepare('SELECT * FROM temp_mailboxes WHERE id = ?').bind(id).first<TempMailbox>();
-  if (!row) {
-    return c.json({ success: false, message: '临时邮箱不存在' }, 404);
-  }
-
-  let baseTime = Date.now();
-  if (row.expires_at) {
-    const existing = new Date(row.expires_at).getTime();
-    if (existing > baseTime) baseTime = existing;
-  }
-
-  const newExpiresAt = new Date(baseTime + minutes * 60 * 1000).toISOString();
-
-  await c.env.DB.prepare(
-    "UPDATE temp_mailboxes SET expires_at = ?, is_permanent = 0, updated_at = datetime('now') WHERE id = ?"
-  )
-    .bind(newExpiresAt, id)
-    .run();
-
+app.post("/generate", async (c) => {
+  const body = object(await c.req.json());
+  const data = await allocateMailbox(c.env, body);
+  return c.json({ success: true, data, message: "邮箱已生成" });
+});
+app.post("/batch-preview", async (c) =>
+  c.json({
+    success: true,
+    data: await previewMailboxes(c.env, await c.req.json()),
+  }),
+);
+app.post("/batch", async (c) => {
+  const data = await createMailboxBatch(c.env, await c.req.json());
   return c.json({
     success: true,
-    message: `已为该邮箱延长 ${minutes} 分钟`,
-    expires_at: newExpiresAt
+    data,
+    message: `已生成 ${data.length} 个邮箱`,
   });
 });
-
-// 4. 切换永久状态 (设为永久 / 取消永久)
-app.post('/:id/toggle-permanent', async (c) => {
-  const id = c.req.param('id');
-  const row = await c.env.DB.prepare('SELECT * FROM temp_mailboxes WHERE id = ?').bind(id).first<TempMailbox>();
-  if (!row) {
-    return c.json({ success: false, message: '临时邮箱不存在' }, 404);
-  }
-
-  const nextPermanent = row.is_permanent ? 0 : 1;
-  let newExpiresAt = row.expires_at;
-
-  if (nextPermanent === 1) {
-    newExpiresAt = '';
-  } else if (!newExpiresAt || new Date(newExpiresAt).getTime() < Date.now()) {
-    newExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  }
-
-  await c.env.DB.prepare(
-    "UPDATE temp_mailboxes SET is_permanent = ?, expires_at = ?, updated_at = datetime('now') WHERE id = ?"
-  )
-    .bind(nextPermanent, newExpiresAt, id)
-    .run();
-
+app.patch("/:id", async (c) => {
+  const body = object(await c.req.json());
+  const remark = text(body.remark, "用途备注", 500).trim();
+  const [result] = await db(c.env).mutate([
+    update(
+      "temp_mailboxes",
+      eq(
+        "id",
+        integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER),
+      ),
+      { remark, updated_at: now() },
+    ),
+  ]);
+  return result.changes
+    ? c.json({ success: true, message: "用途备注已更新" })
+    : c.json({ success: false, message: "邮箱不存在" }, 404);
+});
+app.get("/:id", async (c) => {
+  const row = await db(c.env).first<TempMailbox>(
+    "temp_mailboxes",
+    eq("id", integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER)),
+  );
+  return row
+    ? c.json({ success: true, data: row })
+    : c.json({ success: false, message: "邮箱不存在" }, 404);
+});
+app.post("/:id/extend", async (c) => {
+  const id = integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER);
+  const minutes = integer(
+    object(await c.req.json()).minutes,
+    "延长分钟",
+    1,
+    525600,
+    60,
+  );
+  const row = await db(c.env).first<TempMailbox>(
+    "temp_mailboxes",
+    eq("id", id),
+  );
+  if (!row) return c.json({ success: false, message: "邮箱不存在" }, 404);
+  if (row.is_permanent) invalid("永久邮箱无需延长有效期");
+  const expires = new Date(
+    Math.max(Date.now(), Date.parse(row.expires_at) || 0) + minutes * 60000,
+  ).toISOString();
+  await db(c.env).mutate([
+    update("temp_mailboxes", eq("id", id), {
+      expires_at: expires,
+      updated_at: now(),
+    }),
+  ]);
   return c.json({
     success: true,
-    is_permanent: Boolean(nextPermanent),
-    expires_at: newExpiresAt,
-    message: nextPermanent ? '已设置为永久邮箱' : '已取消永久，设置为 1 小时有效期'
+    message: `有效期已延长 ${minutes} 分钟`,
+    expires_at: expires,
   });
 });
-
-// 5. 绑定到平台台账并转为永久
-app.post('/:id/link-vault', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json().catch(() => ({}));
-  const { vault_id, platform_name } = body;
-
-  await c.env.DB.prepare(
-    "UPDATE temp_mailboxes SET associated_vault_id = ?, associated_platform = ?, is_permanent = 1, updated_at = datetime('now') WHERE id = ?"
+app.post("/:id/toggle-permanent", async (c) => {
+  const id = integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER);
+  const row = await db(c.env).first<TempMailbox>(
+    "temp_mailboxes",
+    eq("id", id),
+  );
+  if (!row) return c.json({ success: false, message: "邮箱不存在" }, 404);
+  const bound = await db(c.env).first(
+    "platform_vault",
+    and(eq("account_email", row.address), eq("email_source", "cf_domain")),
+  );
+  if (row.is_permanent && bound)
+    invalid("此邮箱绑定了平台账号，需永久保留；请先调整平台绑定");
+  const permanent = row.is_permanent ? 0 : 1;
+  await db(c.env).mutate([
+    update("temp_mailboxes", eq("id", id), {
+      is_permanent: permanent,
+      expires_at: permanent ? "" : new Date(Date.now() + 3600000).toISOString(),
+      updated_at: now(),
+    }),
+    update("cf_inbox_mails", eq("recipient", row.address), {
+      is_protected: permanent || (bound ? 1 : 0),
+    }),
+  ]);
+  return c.json({
+    success: true,
+    message: permanent ? "已设为永久邮箱" : "已设为一小时有效",
+  });
+});
+app.post("/:id/link-vault", async (c) => {
+  const id = integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER);
+  const vault = integer(
+    object(await c.req.json()).vault_id,
+    "台账 ID",
+    1,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const row = await db(c.env).first<{ address: string }>(
+    "temp_mailboxes",
+    eq("id", id),
+  );
+  const account = await db(c.env).first<{ platform_name: string }>(
+    "platform_vault",
+    and(
+      eq("id", vault),
+      eq("account_email", row?.address || ""),
+      eq("email_source", "cf_domain"),
+    ),
+  );
+  if (!row || !account) invalid("邮箱与平台记录不匹配，请先在台账中绑定该邮箱");
+  await db(c.env).mutate([
+    update("temp_mailboxes", eq("id", id), {
+      associated_vault_id: vault,
+      associated_platform: account.platform_name,
+      is_permanent: 1,
+      expires_at: "",
+      updated_at: now(),
+    }),
+    update("cf_inbox_mails", eq("recipient", row.address), { is_protected: 1 }),
+  ]);
+  return c.json({ success: true, message: "已关联平台并永久保护" });
+});
+app.delete("/:id", async (c) => {
+  const id = integer(c.req.param("id"), "邮箱 ID", 1, Number.MAX_SAFE_INTEGER);
+  const row = await db(c.env).first<{ address: string }>(
+    "temp_mailboxes",
+    eq("id", id),
+  );
+  if (!row) return c.json({ success: false, message: "邮箱不存在" }, 404);
+  if (
+    await db(c.env).first(
+      "platform_vault",
+      and(eq("account_email", row.address), eq("email_source", "cf_domain")),
+    )
   )
-    .bind(vault_id || null, platform_name || '', id)
-    .run();
-
-  return c.json({ success: true, message: '已关联平台账号并转为永久保留' });
+    invalid("该邮箱仍绑定平台账号，请先调整平台绑定");
+  // Keep an expired tombstone: catch-all must not silently revive a destroyed address.
+  await db(c.env).mutate([
+    update("temp_mailboxes", eq("id", id), {
+      is_permanent: 0,
+      expires_at: "1970-01-01T00:00:00.000Z",
+      updated_at: now(),
+    }),
+    remove(
+      "cf_inbox_mails",
+      and(eq("recipient", row.address), eq("is_pinned", 0)),
+    ),
+  ]);
+  return c.json({ success: true, message: "邮箱已停用，后续邮件将被拒收" });
 });
-
-// 6. 销毁删除临时邮箱
-app.delete('/:id', async (c) => {
-  const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM temp_mailboxes WHERE id = ?').bind(id).run();
-  return c.json({ success: true, message: '临时邮箱已销毁' });
-});
-
 export default app;

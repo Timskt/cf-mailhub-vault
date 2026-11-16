@@ -1,52 +1,81 @@
-import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
-import type { Env } from '../types';
-import { createSessionToken, verifySessionToken, setSessionCookie, clearSessionCookie, hashPassword } from '../auth';
-
+import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
+import {
+  authConfigured,
+  clearSessionCookie,
+  createSessionToken,
+  getSessionSecret,
+  hashPassword,
+  setSessionCookie,
+  sha256,
+  verifyPassword,
+  verifySessionToken,
+} from "../auth";
+import { db, eq, remove, update } from "../storage/client";
+import type { Env } from "../types";
+import { object, text } from "../validation";
 const app = new Hono<{ Bindings: Env }>();
-
-app.post('/login', async (c) => {
-  const { password } = await c.req.json().catch(() => ({}));
-  if (!password) {
-    return c.json({ success: false, message: '请输入管理员密码' }, 400);
-  }
-
-  let isValid = false;
-
-  // 1. 优先比对数据库中自定义设置的密码
-  const row = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'admin_password'").first<{ value: string }>();
-  if (row && row.value) {
-    const hashed = await hashPassword(password);
-    isValid = (hashed === row.value || password === row.value);
-  } else {
-    // 2. 数据库未自定义，比对环境变量 ADMIN_PASSWORD (默认兜底: Admin8888Password)
-    const envPwd = c.env.ADMIN_PASSWORD || 'Admin8888Password';
-    isValid = (password === envPwd);
-  }
-
-  if (!isValid) {
-    return c.json({ success: false, message: '密码错误，请重新输入（默认密码: Admin8888Password）' }, 401);
-  }
-
-  const cookieSecret = c.env.COOKIE_SECRET || c.env.ADMIN_PASSWORD || 'default-mailhub-secret';
-  const token = await createSessionToken('admin', cookieSecret);
-  setSessionCookie(c, token);
-
-  return c.json({ success: true, message: '登录成功' });
+app.post("/login", async (c) => {
+  const password = text(object(await c.req.json()).password, "密码", 1000);
+  if (!password)
+    return c.json({ success: false, message: "请输入管理员密码" }, 400);
+  if (!(await authConfigured(c.env)))
+    return c.json(
+      {
+        success: false,
+        message: "尚未配置管理员密码，请先配置 ADMIN_PASSWORD Secret",
+      },
+      503,
+    );
+  const identity = await sha256(c.req.header("CF-Connecting-IP") || "local");
+  const now = Math.floor(Date.now() / 1000);
+  const [attemptResult] = await db(c.env).mutate([
+    { op: "throttle", identity, time: now },
+  ]);
+  const attempt = attemptResult.rows[0] as {
+    attempts: number;
+    reset_at: number;
+  };
+  if (attempt && attempt.attempts > 10)
+    return c.json(
+      { success: false, message: "尝试次数过多，请稍后再试" },
+      429,
+      { "Retry-After": String(attempt.reset_at - now) },
+    );
+  const row = await db(c.env).first<{ value: string }>(
+    "settings",
+    eq("key", "admin_password"),
+  );
+  const valid = row?.value
+    ? await verifyPassword(password, row.value)
+    : (await sha256(password)) === (await sha256(c.env.ADMIN_PASSWORD!));
+  if (!valid)
+    return c.json({ success: false, message: "密码错误，请重新输入" }, 401);
+  if (row && !row.value.startsWith("pbkdf2:"))
+    await db(c.env).mutate([
+      update("settings", eq("key", "admin_password"), {
+        value: await hashPassword(password),
+      }),
+    ]);
+  await db(c.env).mutate([remove("auth_attempts", eq("identity", identity))]);
+  setSessionCookie(
+    c,
+    await createSessionToken("admin", await getSessionSecret(c.env)),
+  );
+  return c.json({ success: true, message: "登录成功" });
 });
-
-app.post('/logout', (c) => {
+app.post("/logout", (c) => {
   clearSessionCookie(c);
-  return c.json({ success: true, message: '已退出登录' });
+  return c.json({ success: true });
 });
-
-app.get('/me', async (c) => {
-  const token = getCookie(c, 'mailhub_session');
-  const cookieSecret = c.env.COOKIE_SECRET || c.env.ADMIN_PASSWORD || 'default-mailhub-secret';
-  if (token && await verifySessionToken(token, cookieSecret)) {
-    return c.json({ success: true, authenticated: true, user: 'admin' });
-  }
-  return c.json({ success: true, authenticated: false });
+app.get("/me", async (c) => {
+  const configured = await authConfigured(c.env);
+  const token = getCookie(c, "mailhub_session");
+  const authenticated =
+    configured &&
+    Boolean(
+      token && (await verifySessionToken(token, await getSessionSecret(c.env))),
+    );
+  return c.json({ success: true, authenticated, configured });
 });
-
 export default app;

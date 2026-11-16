@@ -1,39 +1,54 @@
 name = "cf-mailhub-vault"
 main = "src/index.ts"
-compatibility_date = "2025-04-01"
+compatibility_date = "2026-11-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
-# 绑定静态前端资源
+# 面板的访问域名，与邮件接收域名相互独立。routes 必须放在 TOML 根级。
+# routes = [{ pattern = "vault.example.com", custom_domain = true }]
+
 [assets]
 directory = "./public"
 binding = "ASSETS"
 run_worker_first = true
 
-# 自定义访问域名 (绑定到您的 Cloudflare 域名)
-# routes = [
-#   { pattern = "vault.yourdomain.com", custom_domain = true }
-# ]
-
-# D1 数据库绑定
 [[d1_databases]]
 binding = "DB"
 database_name = "mailhub-vault-db"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
 
-# 定时任务：自动续期 Outlook Token、邮件自动清理
+[[durable_objects.bindings]]
+name = "STORAGE"
+class_name = "StorageCoordinator"
+
+[[migrations]]
+tag = "storage-v1"
+new_sqlite_classes = ["StorageCoordinator"]
+
 [triggers]
-crons = ["0 */6 * * *"]
+# 每分钟处理通知；Outlook 续期仍每 15 分钟执行。
+crons = ["* * * * *"]
+
+# 可选私有原始邮件/附件存储，先创建 bucket 后启用。不要开启公开访问。
+# [[r2_buckets]]
+# binding = "MAIL_OBJECTS"
+# bucket_name = "mailhub-mail-objects"
 
 [vars]
-# 自定义域名列表 (支持多个，逗号分隔，用于 Catch-all 邮箱生成)
-CF_DOMAINS = "yourdomain.com"
-# 默认邮箱前缀 (可留空)
+# 支持多个邮件域名，用逗号分隔；也可部署后在面板添加。
+# 每个域名均需启用 Email Routing，并将 Catch-all 指向同一个 Worker。
+CF_DOMAINS = "example.com,mail.example.net"
 DEFAULT_PREFIX = "tmp"
-# 对外 API 访问密钥 (可选，用于脚本批量自动化)
-API_KEY = ""
 
-# Secrets (通过 wrangler secret put 配置):
-# ADMIN_PASSWORD = "你的管理面板访问密码"
-# COOKIE_SECRET = "随机生成用于Session签名的密钥"
-# TELEGRAM_BOT_TOKEN = "可选TG推送Token"
-# TELEGRAM_CHAT_ID = "可选TG Chat ID"
+# 必需：pnpm exec wrangler secret put ADMIN_PASSWORD
+# 建议：pnpm exec wrangler secret put COOKIE_SECRET
+# 可选：pnpm exec wrangler secret put API_KEY
+# 数据源管理必需：pnpm exec wrangler secret put STORAGE_ENCRYPTION_KEY（至少 32 位随机字符）
+# 凭据默认复用 STORAGE_ENCRYPTION_KEY；也可设置独立 CREDENTIAL_ENCRYPTION_KEY。
+# 换密钥时先保留 CREDENTIAL_ENCRYPTION_KEY_PREVIOUS，再在设置中重加密全部凭据。
+# 微软一键授权（使用自己的 Web 应用）：
+# pnpm exec wrangler secret put MICROSOFT_CLIENT_ID
+# pnpm exec wrangler secret put MICROSOFT_CLIENT_SECRET
+# 可选 CF 来信通知：TELEGRAM_BOT_TOKEN、TELEGRAM_CHAT_ID
+# 不要把密码、API Key 或应用密钥写入 [vars]。

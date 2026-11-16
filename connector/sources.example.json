@@ -1,0 +1,29 @@
+[
+  {
+    "id": "mysql-main",
+    "name": "MySQL 主实例",
+    "kind": "mysql",
+    "url": "mysql://mailhub:REPLACE_PASSWORD@mysql.internal:3306/mailhub",
+    "tls": true
+  },
+  {
+    "id": "mysql-new",
+    "name": "MySQL 新服务器",
+    "kind": "mysql",
+    "url": "mysql://mailhub:REPLACE_PASSWORD@new-mysql.internal:3306/mailhub",
+    "tls": true
+  },
+  {
+    "id": "mongo-main",
+    "name": "MongoDB",
+    "kind": "mongodb",
+    "url": "mongodb://mailhub:REPLACE_PASSWORD@mongo.internal:27017/mailhub?replicaSet=rs0&authSource=admin&tls=true"
+  },
+  {
+    "id": "redis-main",
+    "name": "Redis",
+    "kind": "redis",
+    "url": "rediss://mailhub:REPLACE_PASSWORD@redis.internal:6379/0",
+    "prefix": "mailhub"
+  }
+]

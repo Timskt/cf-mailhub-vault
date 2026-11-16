@@ -1,5 +1,11 @@
 export interface Env {
   DB: D1Database;
+  STORAGE?: DurableObjectNamespace;
+  STORAGE_ENCRYPTION_KEY?: string;
+  CREDENTIAL_ENCRYPTION_KEY?: string;
+  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  MAIL_OBJECTS?: R2Bucket;
+  STORAGE_ALLOW_HTTP_LOCAL?: string;
   ASSETS?: Fetcher;
   ADMIN_PASSWORD?: string;
   COOKIE_SECRET?: string;
@@ -8,6 +14,8 @@ export interface Env {
   API_KEY?: string;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
+  MICROSOFT_CLIENT_ID?: string;
+  MICROSOFT_CLIENT_SECRET?: string;
 }
 
 export interface PlatformAccount {
@@ -15,11 +23,11 @@ export interface PlatformAccount {
   platform_name: string;
   platform_url: string;
   account_email: string;
-  email_source: 'cf_domain' | 'outlook' | 'gptmail' | 'external';
+  email_source: "cf_domain" | "outlook" | "gptmail" | "external";
   username: string;
   password: string;
   totp_secret: string;
-  status: 'active' | 'pending' | 'banned' | 'deprecated';
+  status: "active" | "pending" | "banned" | "deprecated";
   category: string;
   proxy_node: string;
   remark: string;
@@ -40,13 +48,18 @@ export interface CfInboxMail {
   text_content: string;
   html_content: string;
   raw_size: number;
+  raw_object_key?: string;
+  attachment_manifest?: string;
   verification_code: string;
   verification_link: string;
-  dkim_status: 'pass' | 'fail' | 'none' | 'unknown';
-  spf_status: 'pass' | 'fail' | 'none' | 'unknown';
+  dkim_status: "pass" | "fail" | "none" | "unknown";
+  spf_status: "pass" | "fail" | "none" | "unknown";
   is_read: number;
   is_pinned: number;
   is_protected: number;
+  is_archived: number;
+  category: string;
+  rule_name: string;
   expires_at: string;
   created_at: string;
 }
@@ -60,6 +73,16 @@ export interface OutlookAccount {
   group_id: number;
   remark: string;
   status: string;
+  auth_status: "unchecked" | "healthy" | "reauth_required" | "error";
+  last_checked_at: string;
+  last_error: string;
+  last_error_code: string;
+  last_token_refresh_at: string;
+  last_token_attempt_at: string;
+  next_token_refresh_at: string;
+  token_refresh_failures: number;
+  token_refresh_status: "pending" | "healthy" | "retrying" | "reauth_required";
+  token_refresh_error: string;
   created_at: string;
   updated_at: string;
 }

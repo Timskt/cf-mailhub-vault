@@ -1,0 +1,14 @@
+{
+  // Local development and reproducible dry-run builds. Production uses wrangler.toml.
+  "name": "mailhub-local-only",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "d1_databases": [{ "binding": "DB", "database_name": "mailhub-local-db", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "MAIL_OBJECTS", "bucket_name": "mailhub-local-objects" }],
+  "vars": { "CF_DOMAINS": "example.test,mail.example.test", "DEFAULT_PREFIX": "tmp", "ADMIN_PASSWORD": "local-mailhub-password", "COOKIE_SECRET": "local-cookie-secret-for-development-only", "API_KEY": "local-mailhub-api-key", "STORAGE_ENCRYPTION_KEY": "local-storage-key-for-tests-only-32-characters", "STORAGE_ALLOW_HTTP_LOCAL": "true" },
+  "durable_objects": { "bindings": [{ "name": "STORAGE", "class_name": "StorageCoordinator" }] },
+  "migrations": [{ "tag": "storage-v1", "new_sqlite_classes": ["StorageCoordinator"] }],
+  "triggers": { "crons": ["* * * * *"] }
+}

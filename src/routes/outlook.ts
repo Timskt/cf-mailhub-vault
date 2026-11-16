@@ -1,502 +1,740 @@
-import { Hono } from 'hono';
-import type { Env, OutlookAccount } from '../types';
-import { getAccessToken, fetchEmails } from '../graph';
-import { extractVerificationInfo } from '../code-extractor';
-
+import { Hono } from "hono";
+import { runTokenRefresh } from "../cron";
+import { extractVerificationInfo } from "../code-extractor";
+import {
+  deleteMessage,
+  downloadAttachment,
+  fetchAttachments,
+  fetchEmails,
+  fetchMessage,
+  FOLDERS,
+  validNextLink,
+  type GraphError,
+} from "../graph";
+import {
+  checkOutlook,
+  outlookCode,
+  outlookFailure,
+  replyOutlookMail,
+  sendOutlookMail,
+  withOutlook,
+} from "../outlook";
+import { importPreview, parseImport, validateAccount } from "../outlook-import";
+import {
+  accountBatchMutation,
+  accountMutation,
+  assertGroup,
+  getAccount,
+} from "../outlook-store";
+import {
+  and,
+  collect,
+  db,
+  eq,
+  insert,
+  now,
+  oneOf,
+  or,
+  remove,
+  search,
+  update,
+  type Filter,
+} from "../storage/client";
+import type { Env, OutlookAccount } from "../types";
+import {
+  boolean,
+  choice,
+  integer,
+  invalid,
+  object,
+  since,
+  text,
+} from "../validation";
 const app = new Hono<{ Bindings: Env }>();
-
-export const DEFAULT_MICROSOFT_CLIENT_ID = '9e5f94bc-e8a4-4e73-b8be-63364c29d753';
-const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export interface ParsedOutlookItem {
-  email: string;
-  password?: string;
-  client_id: string;
-  refresh_token: string;
-  remark?: string;
-  valid: boolean;
-  error?: string;
+function outboundStatus(
+  error: GraphError,
+): 400 | 401 | 403 | 404 | 409 | 413 | 429 | 502 {
+  switch (error.status) {
+    case 400:
+    case 401:
+    case 403:
+    case 404:
+    case 409:
+    case 413:
+    case 429:
+      return error.status;
+    default:
+      return 502;
+  }
 }
-
-/**
- * 智能解析单行 Outlook/Hotmail 账号数据
- * 支持常见格式：
- * 1. 邮箱----密码----ClientID----RefreshToken
- * 2. 邮箱----密码----RefreshToken (自动补齐默认公用 Client ID)
- * 3. 邮箱----密码----ClientID----RefreshToken----辅助邮箱/备注
- * 4. 任意以 ----、---、::、|、制表符、逗号 分隔的格式
- * 5. JSON 对象字符串
- */
-export function parseOutlookLine(line: string): ParsedOutlookItem | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) {
-    return null;
-  }
-
-  // 1. 支持直接粘贴 JSON 对象行
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    try {
-      const obj = JSON.parse(trimmed);
-      const email = (obj.email || obj.username || obj.mail || '').trim().toLowerCase();
-      const password = (obj.password || obj.pwd || '').trim();
-      const clientId = (obj.client_id || obj.clientId || DEFAULT_MICROSOFT_CLIENT_ID).trim();
-      const refreshToken = (obj.refresh_token || obj.refreshToken || obj.token || '').trim();
-      const remark = (obj.remark || obj.note || '').trim();
-      const valid = Boolean(email && email.includes('@') && refreshToken);
-      return {
-        email,
-        password,
-        client_id: clientId || DEFAULT_MICROSOFT_CLIENT_ID,
-        refresh_token: refreshToken,
-        remark,
-        valid,
-        error: !valid ? 'JSON 数据中未包含有效邮箱地址或 Refresh Token' : undefined
-      };
-    } catch (e) {}
-  }
-
-  // 2. 切分分隔符
-  let parts: string[] = [];
-  if (trimmed.includes('----')) {
-    parts = trimmed.split('----').map(s => s.trim());
-  } else if (trimmed.includes('---')) {
-    parts = trimmed.split('---').map(s => s.trim());
-  } else if (trimmed.includes('::')) {
-    parts = trimmed.split('::').map(s => s.trim());
-  } else if (trimmed.includes('|')) {
-    parts = trimmed.split('|').map(s => s.trim());
-  } else if (trimmed.includes('\t')) {
-    parts = trimmed.split('\t').map(s => s.trim());
-  } else if (trimmed.includes(',') && !trimmed.includes(';')) {
-    parts = trimmed.split(',').map(s => s.trim());
-  } else {
-    parts = trimmed.split(/\s+/).map(s => s.trim());
-  }
-
-  parts = parts.filter(Boolean);
-  if (parts.length === 0) return null;
-
-  let email = '';
-  let password = '';
-  let clientId = '';
-  let refreshToken = '';
-  let remark = '';
-
-  // 识别邮箱部分
-  const emailIdx = parts.findIndex(p => EMAIL_REGEX.test(p) || p.includes('@'));
-  if (emailIdx !== -1) {
-    email = parts[emailIdx].toLowerCase();
-    parts.splice(emailIdx, 1);
-  }
-
-  // 识别 Client ID (UUID 格式)
-  const uuidIdx = parts.findIndex(p => UUID_REGEX.test(p));
-  if (uuidIdx !== -1) {
-    clientId = parts[uuidIdx];
-    parts.splice(uuidIdx, 1);
-  }
-
-  // 识别 Refresh Token (以 M. 开头、含 MsaArtifacts、或长度 >= 50)
-  const tokenIdx = parts.findIndex(p => p.length >= 50 || p.startsWith('M.') || p.includes('MsaArtifacts'));
-  if (tokenIdx !== -1) {
-    refreshToken = parts[tokenIdx];
-    parts.splice(tokenIdx, 1);
-  } else if (parts.length > 0) {
-    let maxIdx = 0;
-    for (let i = 1; i < parts.length; i++) {
-      if (parts[i].length > parts[maxIdx].length) maxIdx = i;
-    }
-    if (parts[maxIdx].length > 25) {
-      refreshToken = parts[maxIdx];
-      parts.splice(maxIdx, 1);
-    }
-  }
-
-  // 若未指定 Client ID，默认使用微软公用客户端 ID
-  if (!clientId) {
-    clientId = DEFAULT_MICROSOFT_CLIENT_ID;
-  }
-
-  // 剩余部分：首个为密码，后续拼接为备注
-  if (parts.length > 0) {
-    password = parts[0];
-    parts.splice(0, 1);
-  }
-  if (parts.length > 0) {
-    remark = parts.join(' | ');
-  }
-
-  const valid = Boolean(email && email.includes('@') && refreshToken);
-  let error: string | undefined;
-  if (!email || !email.includes('@')) {
-    error = '未识别到有效邮箱地址';
-  } else if (!refreshToken) {
-    error = '未识别到有效 Refresh Token';
-  }
-
-  return {
-    email,
-    password,
-    client_id: clientId,
-    refresh_token: refreshToken,
-    remark,
-    valid,
-    error
-  };
-}
-
-// 1. 获取 Outlook 账号列表 (支持模糊搜索 q)
-app.get('/accounts', async (c) => {
-  const query = c.req.query('q')?.trim() || '';
-  let sql = `SELECT a.*, g.name as group_name, g.color as group_color
-             FROM accounts a
-             LEFT JOIN groups g ON a.group_id = g.id`;
-  const params: any[] = [];
-
-  if (query) {
-    sql += ` WHERE (a.email LIKE ? OR a.remark LIKE ? OR g.name LIKE ?)`;
-    const wild = `%${query}%`;
-    params.push(wild, wild, wild);
-  }
-
-  sql += ` ORDER BY a.id DESC`;
-
-  const { results } = await c.env.DB.prepare(sql).bind(...params).all();
-  return c.json({ success: true, data: results || [] });
-});
-
-// 2. 添加单个 Outlook 账号
-app.post('/accounts', async (c) => {
-  const body = await c.req.json();
-  const { email, client_id, refresh_token, password = '', group_id = 1, remark = '' } = body;
-
-  if (!email || !refresh_token) {
-    return c.json({ success: false, message: 'email 和 refresh_token 不能为空' }, 400);
-  }
-
-  const effectiveClientId = client_id ? client_id.trim() : DEFAULT_MICROSOFT_CLIENT_ID;
-
-  await c.env.DB.prepare(
-    `INSERT INTO accounts (email, client_id, refresh_token, password, group_id, remark)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(email) DO UPDATE SET
-       client_id = excluded.client_id,
-       refresh_token = excluded.refresh_token,
-       password = CASE WHEN excluded.password != '' THEN excluded.password ELSE accounts.password END,
-       group_id = excluded.group_id,
-       remark = CASE WHEN excluded.remark != '' THEN excluded.remark ELSE accounts.remark END,
-       updated_at = datetime('now')`
-  )
-    .bind(email.toLowerCase().trim(), effectiveClientId, refresh_token.trim(), password.trim(), group_id, remark.trim())
-    .run();
-
-  return c.json({ success: true, message: '添加/更新成功' });
-});
-
-// 3. 批量解析预览接口 (供前端实时解析展示表格与校验)
-app.post('/parse-preview', async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const rawText = (body.raw_text || '').toString();
-
-  const lines = rawText.split('\n');
-  const accounts: ParsedOutlookItem[] = [];
-  const errors: { line: number; text: string; error: string }[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-    const parsed = parseOutlookLine(line);
-    if (parsed && parsed.valid) {
-      accounts.push(parsed);
-    } else {
-      errors.push({
-        line: i + 1,
-        text: line.length > 80 ? `${line.substring(0, 80)}...` : line,
-        error: parsed?.error || '无法解析该行数据'
-      });
-    }
-  }
-
-  return c.json({
-    success: true,
-    total_lines: lines.length,
-    valid_count: accounts.length,
-    error_count: errors.length,
-    accounts,
-    errors
-  });
-});
-
-// 4. 批量导入 Outlook 账号接口
-app.post('/batch-import', async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const rawText = (body.raw_text || '').toString();
-  const rawAccounts = Array.isArray(body.accounts) ? body.accounts : [];
-  const groupId = parseInt(body.group_id || '1', 10) || 1;
-  const syncToVault = body.sync_to_vault !== false; // 默认同时同步登记至 platform_vault
-
-  const parsedList: ParsedOutlookItem[] = [];
-  const errors: { line: number; text: string; error: string }[] = [];
-
-  // 解析文本
-  if (rawText.trim()) {
-    const trimmed = rawText.trim();
-    let handledJson = false;
-
-    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-      try {
-        const jsonArr = JSON.parse(trimmed);
-        if (Array.isArray(jsonArr)) {
-          for (let i = 0; i < jsonArr.length; i++) {
-            const item = jsonArr[i];
-            const lineStr = typeof item === 'string' ? item : JSON.stringify(item);
-            const parsed = parseOutlookLine(lineStr);
-            if (parsed && parsed.valid) {
-              parsedList.push(parsed);
-            } else {
-              errors.push({ line: i + 1, text: lineStr.substring(0, 80), error: parsed?.error || '无效记录' });
-            }
-          }
-          handledJson = true;
-        }
-      } catch (e) {}
-    }
-
-    if (!handledJson) {
-      const lines = rawText.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-        const parsed = parseOutlookLine(line);
-        if (parsed && parsed.valid) {
-          parsedList.push(parsed);
-        } else {
-          errors.push({
-            line: i + 1,
-            text: line.length > 80 ? `${line.substring(0, 80)}...` : line,
-            error: parsed?.error || '无法识别格式'
-          });
-        }
-      }
-    }
-  }
-
-  // 融合客户端已经解析的 accounts 列表
-  for (const acc of rawAccounts) {
-    if (!acc) continue;
-    const email = (acc.email || '').trim().toLowerCase();
-    const refreshToken = (acc.refresh_token || '').trim();
-    const clientId = (acc.client_id || DEFAULT_MICROSOFT_CLIENT_ID).trim();
-    const password = (acc.password || '').trim();
-    const remark = (acc.remark || '').trim();
-    if (email && email.includes('@') && refreshToken) {
-      parsedList.push({
-        email,
-        password,
-        client_id: clientId,
-        refresh_token: refreshToken,
-        remark,
-        valid: true
-      });
-    } else {
-      errors.push({ line: 0, text: email || '未命名', error: '缺少邮箱或 Refresh Token' });
-    }
-  }
-
-  if (parsedList.length === 0) {
-    return c.json({
-      success: false,
-      message: '未能成功识别出任何有效的 Outlook 账号，请检查输入格式',
-      errors
-    }, 400);
-  }
-
-  // 去重 (以邮箱为键，后出现的覆盖先出现的)
-  const uniqueMap = new Map<string, ParsedOutlookItem>();
-  for (const item of parsedList) {
-    uniqueMap.set(item.email, item);
-  }
-  const accountsToImport = Array.from(uniqueMap.values());
-
-  // 分批写入 D1 (每批最多 30 个账号，确保不超过 D1 单次 batch 上限)
-  const CHUNK_SIZE = 30;
-  let importedCount = 0;
-
-  for (let i = 0; i < accountsToImport.length; i += CHUNK_SIZE) {
-    const chunk = accountsToImport.slice(i, i + CHUNK_SIZE);
-    const stmts: any[] = [];
-
-    for (const acc of chunk) {
-      // 1. 写入/更新 accounts 表
-      stmts.push(
-        c.env.DB.prepare(
-          `INSERT INTO accounts (email, client_id, refresh_token, password, group_id, remark)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON CONFLICT(email) DO UPDATE SET
-             client_id = excluded.client_id,
-             refresh_token = excluded.refresh_token,
-             password = CASE WHEN excluded.password != '' THEN excluded.password ELSE accounts.password END,
-             group_id = excluded.group_id,
-             remark = CASE WHEN excluded.remark != '' THEN excluded.remark ELSE accounts.remark END,
-             updated_at = datetime('now')`
-        ).bind(
-          acc.email,
-          acc.client_id || DEFAULT_MICROSOFT_CLIENT_ID,
-          acc.refresh_token,
-          acc.password || '',
-          groupId,
-          acc.remark || ''
-        )
-      );
-
-      // 2. 同步写入 platform_vault 台账表 (若开启)
-      if (syncToVault) {
-        stmts.push(
-          c.env.DB.prepare(
-            `INSERT INTO platform_vault (
-               platform_name, platform_url, account_email, email_source,
-               username, password, status, category, remark
-             )
-             SELECT 'Outlook', 'https://outlook.live.com', ?, 'outlook', ?, ?, 'active', '微软生态', ?
-             WHERE NOT EXISTS (
-               SELECT 1 FROM platform_vault WHERE account_email = ? AND platform_name = 'Outlook'
-             )`
-          ).bind(
-            acc.email,
-            acc.email.split('@')[0],
-            acc.password || '',
-            acc.remark ? `批量导入: ${acc.remark}` : '批量导入微软托管账号',
-            acc.email
-          )
-        );
-
-        stmts.push(
-          c.env.DB.prepare(
-            `UPDATE platform_vault
-             SET password = CASE WHEN ? != '' THEN ? ELSE password END,
-                 updated_at = datetime('now')
-             WHERE account_email = ? AND platform_name = 'Outlook'`
-          ).bind(
-            acc.password || '',
-            acc.password || '',
-            acc.email
-          )
-        );
-      }
-    }
-
-    if (stmts.length > 0) {
-      await c.env.DB.batch(stmts);
-    }
-    importedCount += chunk.length;
-  }
-
-  return c.json({
-    success: true,
-    message: `成功批量导入 ${importedCount} 个 Outlook 账号${syncToVault ? ' 并同步至平台资产台账' : ''}`,
-    count: importedCount,
-    skipped: errors.length,
-    errors: errors.slice(0, 10)
-  });
-});
-
-// 5. 单个账号一键提取最新验证码
-app.get('/accounts/:id/code', async (c) => {
-  const id = c.req.param('id');
-  const acc = await c.env.DB.prepare('SELECT * FROM accounts WHERE id = ?')
-    .bind(id)
-    .first<OutlookAccount>();
-
-  if (!acc) {
-    return c.json({ success: false, message: '账号不存在' }, 404);
-  }
-
-  const { token, newRefreshToken, error } = await getAccessToken(acc.client_id, acc.refresh_token);
-  if (error || !token) {
-    return c.json({ success: false, message: `Token 刷新失败: ${error?.message || '未知错误'}` }, 400);
-  }
-
-  if (newRefreshToken && newRefreshToken !== acc.refresh_token) {
-    await c.env.DB.prepare(
-      "UPDATE accounts SET refresh_token = ?, updated_at = datetime('now') WHERE id = ?"
-    )
-      .bind(newRefreshToken, acc.id)
-      .run();
-  }
-
-  const mails = await fetchEmails(token, { folder: 'inbox', top: 5, includeBody: true });
-  if (mails.error) {
-    return c.json({ success: false, message: `读取邮件失败: ${mails.error.message}` }, 400);
-  }
-
-  if (!mails.items || mails.items.length === 0) {
-    return c.json({ success: true, data: { has_mail: false, message: 'Outlook 收件箱暂无邮件' } });
-  }
-
-  const latest = mails.items[0];
-  const info = extractVerificationInfo(
-    latest.subject || '',
-    latest.bodyPreview || '',
-    latest.body?.content || ''
-  );
-
+app.get("/renewal", async (c) => {
+  const active = eq("status", "active");
+  const [last, due, attention, activeCount] = await Promise.all([
+    db(c.env).first<{ value: string }>(
+      "settings",
+      eq("key", "token_refresh_last_run"),
+    ),
+    db(c.env).count(
+      "accounts",
+      and(
+        active,
+        { field: "token_refresh_status", op: "ne", value: "reauth_required" },
+        or(eq("next_token_refresh_at", ""), {
+          field: "next_token_refresh_at",
+          op: "lte",
+          value: new Date().toISOString(),
+        }),
+      ),
+    ),
+    db(c.env).count(
+      "accounts",
+      and(active, eq("token_refresh_status", "reauth_required")),
+    ),
+    db(c.env).count("accounts", active),
+  ]);
   return c.json({
     success: true,
     data: {
-      has_mail: true,
-      sender: latest.from?.emailAddress?.name || latest.from?.emailAddress?.address,
-      subject: latest.subject,
-      received_at: latest.receivedDateTime,
-      code: info.code,
-      link: info.link,
-      message: info.code ? '成功提取最新验证码' : '未在最新邮件中匹配到验证码'
-    }
+      last_run: last ? JSON.parse(last.value) : null,
+      due,
+      attention,
+      active: activeCount,
+    },
   });
 });
-
-// 6. 读取 Outlook 邮件列表
-app.get('/accounts/:id/emails', async (c) => {
-  const id = c.req.param('id');
-  const folder = c.req.query('folder') || 'inbox';
-  const top = parseInt(c.req.query('top') || '20', 10);
-  const keyword = c.req.query('q') || '';
-
-  const acc = await c.env.DB.prepare('SELECT * FROM accounts WHERE id = ?')
-    .bind(id)
-    .first<OutlookAccount>();
-
-  if (!acc) {
-    return c.json({ success: false, message: '账号不存在' }, 404);
-  }
-
-  const { token, newRefreshToken, error } = await getAccessToken(acc.client_id, acc.refresh_token);
-  if (error || !token) {
-    return c.json({ success: false, message: `Token 刷新失败: ${error?.message || '未知错误'}` }, 400);
-  }
-
-  // 若微软下发了新 refresh_token，自动持久化存储
-  if (newRefreshToken && newRefreshToken !== acc.refresh_token) {
-    await c.env.DB.prepare(
-      "UPDATE accounts SET refresh_token = ?, updated_at = datetime('now') WHERE id = ?"
-    )
-      .bind(newRefreshToken, acc.id)
-      .run();
-  }
-
-  const mails = await fetchEmails(token, { folder, top, keyword, includeBody: true });
-  if (mails.error) {
-    return c.json({ success: false, message: `读取邮件失败: ${mails.error.message}` }, 400);
-  }
-
-  return c.json({ success: true, data: mails.items || [] });
+app.post("/renewal/run", async (c) => {
+  await runTokenRefresh(c.env);
+  return c.json({
+    success: true,
+    message: "已执行一轮到期账号续期，请查看最近执行结果",
+  });
 });
-
-// 7. 删除 Outlook 账号
-app.delete('/accounts/:id', async (c) => {
-  const id = c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM accounts WHERE id = ?').bind(id).run();
-  return c.json({ success: true, message: '已删除' });
+const authStates = [
+  "unchecked",
+  "healthy",
+  "reauth_required",
+  "error",
+] as const;
+app.get("/accounts", async (c) => {
+  const query = text(c.req.query("q"), "搜索", 200).trim();
+  const limit = integer(c.req.query("limit"), "每页数量", 1, 100, 30),
+    page = integer(c.req.query("page"), "页码", 1, 100000, 1);
+  const store = db(c.env),
+    filters: Filter[] = [];
+  if (query) {
+    const [groups, platforms] = await Promise.all([
+      collect(store, "groups", {
+        where: search(query, "name"),
+        columns: ["id"],
+      }),
+      collect(store, "platform_vault", {
+        where: search(query, "platform_name"),
+        columns: ["account_email"],
+      }),
+    ]);
+    filters.push(
+      or(
+        search(query, "email", "remark"),
+        oneOf(
+          "group_id",
+          groups.map((g) => g.id),
+        ),
+        oneOf(
+          "email",
+          platforms.map((p) => p.account_email),
+        ),
+      ),
+    );
+  }
+  if (c.req.query("group_id"))
+    filters.push(
+      eq("group_id", integer(c.req.query("group_id"), "分组", 1, 1000000)),
+    );
+  if (c.req.query("tag_id")) {
+    const links = await collect(store, "account_tags", {
+      where: eq("tag_id", integer(c.req.query("tag_id"), "标签", 1, 1000000)),
+      columns: ["account_id"],
+    });
+    filters.push(
+      oneOf(
+        "id",
+        links.map((r) => r.account_id),
+      ),
+    );
+  }
+  if (c.req.query("status"))
+    filters.push(
+      eq(
+        "status",
+        choice(c.req.query("status"), "状态", ["active", "disabled"]),
+      ),
+    );
+  if (c.req.query("auth_status"))
+    filters.push(
+      eq(
+        "auth_status",
+        choice(c.req.query("auth_status"), "授权状态", authStates),
+      ),
+    );
+  const where = and(...filters);
+  const [rows, total, all, disabled, healthy, unchecked, attention] =
+    await Promise.all([
+      store.select("accounts", {
+        where,
+        order: [["id", "desc"]],
+        limit,
+        offset: (page - 1) * limit,
+      }),
+      store.count("accounts", where),
+      store.count("accounts"),
+      store.count("accounts", eq("status", "disabled")),
+      store.count(
+        "accounts",
+        and(eq("status", "active"), eq("auth_status", "healthy")),
+      ),
+      store.count(
+        "accounts",
+        and(eq("status", "active"), eq("auth_status", "unchecked")),
+      ),
+      store.count(
+        "accounts",
+        and(
+          eq("status", "active"),
+          oneOf("auth_status", ["error", "reauth_required"]),
+        ),
+      ),
+    ]);
+  const [groups, links, platforms, tags] = await Promise.all([
+    collect(store, "groups", {
+      where: oneOf(
+        "id",
+        rows.map((a) => a.group_id),
+      ),
+    }),
+    collect(store, "account_tags", {
+      where: oneOf(
+        "account_id",
+        rows.map((a) => a.id),
+      ),
+    }),
+    collect(store, "platform_vault", {
+      where: and(
+        oneOf(
+          "account_email",
+          rows.map((a) => a.email),
+        ),
+        eq("email_source", "outlook"),
+      ),
+      columns: ["account_email"],
+    }),
+    collect(store, "tags"),
+  ]);
+  const groupMap = new Map(groups.map((g) => [g.id, g])),
+    tagMap = new Map(tags.map((t) => [t.id, t]));
+  return c.json({
+    success: true,
+    data: rows.map(({ password, refresh_token, ...row }) => ({
+      ...row,
+      has_password: password ? 1 : 0,
+      group_name: groupMap.get(row.group_id)?.name || "",
+      group_color: groupMap.get(row.group_id)?.color || "",
+      platform_count: platforms.filter((p) => p.account_email === row.email)
+        .length,
+      tags: links
+        .filter((l) => l.account_id === row.id)
+        .map((l) => tagMap.get(l.tag_id))
+        .filter(Boolean),
+    })),
+    total,
+    page,
+    limit,
+    summary: { total: all, disabled, healthy, unchecked, attention },
+  });
 });
-
+app.get("/accounts/export", async (c) => {
+  const ids = (c.req.query("ids") || "")
+    .split(",")
+    .filter(Boolean)
+    .map((id) => integer(id, "账号 ID", 1, Number.MAX_SAFE_INTEGER));
+  if (!ids.length || ids.length > 100) invalid("请选中 1–100 个账号后导出");
+  const results = await db(c.env).select("accounts", {
+    where: oneOf("id", ids),
+    order: [["id", "asc"]],
+    columns: [
+      "email",
+      "password",
+      "client_id",
+      "refresh_token",
+      "remark",
+      "group_id",
+    ],
+  });
+  return c.json(
+    { version: 1, exported_at: new Date().toISOString(), accounts: results },
+    200,
+    { "Content-Disposition": 'attachment; filename="outlook-accounts.json"' },
+  );
+});
+app.post("/accounts", async (c) => {
+  const body = object(await c.req.json());
+  const account = validateAccount(body);
+  const group = integer(body.group_id, "分组", 1, 1000000, 1);
+  const status = choice(body.status, "状态", ["active", "disabled"], "active");
+  await assertGroup(c.env, group);
+  const result = await db(c.env).mutate([
+    accountMutation(account, group),
+    update("accounts", eq("email", account.email), { status }),
+  ]);
+  const row = { id: result[0].rows[0]?.id, email: account.email };
+  return c.json({
+    success: true,
+    data: row,
+    message: "Outlook 账号已保存，请测试连接",
+  });
+});
+app.post("/parse-preview", async (c) => {
+  const body = object(await c.req.json());
+  return c.json({
+    success: true,
+    ...importPreview(parseImport(body.raw_text)),
+  });
+});
+app.post("/batch-import", async (c) => {
+  const body = object(await c.req.json());
+  if (body.raw_text !== undefined && body.accounts !== undefined)
+    invalid("raw_text 与 accounts 请只提供一种，避免重复导入");
+  const raw =
+    body.accounts === undefined ? body.raw_text : JSON.stringify(body.accounts);
+  const parsed = parseImport(raw);
+  if (!parsed.accounts.length) invalid("未识别到有效账号，请检查导入预览");
+  const group = integer(body.group_id, "分组", 1, 1000000, 1);
+  const mode = choice(
+    body.duplicate_mode,
+    "重复处理方式",
+    ["skip", "update"],
+    "skip",
+  );
+  const sync = boolean(body.sync_to_vault, "同步至台账", true);
+  await assertGroup(c.env, group);
+  const existing = new Set(
+    (
+      await collect(db(c.env), "accounts", {
+        where: oneOf(
+          "email",
+          parsed.accounts.map((a) => a.email),
+        ),
+        columns: ["email"],
+      })
+    ).map((r) => String(r.email)),
+  );
+  const toWrite = parsed.accounts.filter(
+    (a) => mode === "update" || !existing.has(a.email),
+  );
+  let created = 0,
+    updated = 0;
+  for (let i = 0; i < toWrite.length; i += 50) {
+    const chunk = toWrite.slice(i, i + 50);
+    try {
+      const saved = await db(c.env).mutate([
+        accountBatchMutation(chunk, group, mode),
+      ]);
+      for (const result of saved)
+        for (const row of result.rows) {
+          if (existing.has(String(row.email))) updated++;
+          else created++;
+        }
+      if (sync) {
+        const linked = await collect(db(c.env), "platform_vault", {
+          where: and(
+            oneOf(
+              "account_email",
+              chunk.map((a) => a.email),
+            ),
+            { field: "platform_name", op: "ieq", value: "outlook" },
+          ),
+        });
+        const accounts = await db(c.env).select("accounts", {
+          where: oneOf(
+            "email",
+            chunk.map((a) => a.email),
+          ),
+        });
+        await db(c.env).mutate(
+          accounts.map((a) =>
+            linked.some((v) => v.account_email === a.email)
+              ? update(
+                  "platform_vault",
+                  and(eq("account_email", a.email), {
+                    field: "platform_name",
+                    op: "ieq",
+                    value: "outlook",
+                  }),
+                  { password: a.password, updated_at: now() },
+                )
+              : insert("platform_vault", {
+                  platform_name: "Outlook",
+                  platform_url: "https://outlook.live.com",
+                  account_email: a.email,
+                  email_source: "outlook",
+                  username: a.email,
+                  password: a.password,
+                  category: "微软生态",
+                  remark: a.remark,
+                }),
+          ),
+        );
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "StorageError") throw error;
+      return c.json(
+        {
+          success: false,
+          error: "IMPORT_PARTIAL",
+          message: `导入中断，已有 ${created + updated} 个账号保存；修正后可用“跳过已有”重试`,
+          created,
+          updated,
+          count: created + updated,
+        },
+        500,
+      );
+    }
+  }
+  return c.json({
+    success: true,
+    created,
+    updated,
+    count: created + updated,
+    skipped: parsed.accounts.length - created - updated,
+    duplicate_count: parsed.duplicate_count,
+    invalid_count: parsed.error_count,
+    errors: parsed.rows
+      .filter((r) => r.error)
+      .map(({ line, error }) => ({ line, error })),
+    message: `新增 ${created} 个，更新 ${updated} 个，跳过 ${parsed.accounts.length - created - updated} 个，格式异常 ${parsed.error_count} 行`,
+  });
+});
+app.post("/accounts/batch", async (c) => {
+  const body = object(await c.req.json());
+  const action = choice(body.action, "批量操作", [
+    "check",
+    "move",
+    "enable",
+    "disable",
+    "delete",
+    "tag",
+    "untag",
+  ]);
+  if (
+    !Array.isArray(body.ids) ||
+    !body.ids.length ||
+    body.ids.length > (action === "check" ? 10 : 50)
+  )
+    invalid(
+      action === "check" ? "每次最多检查 10 个账号" : "每次最多操作 50 个账号",
+    );
+  const ids = [
+    ...new Set(
+      body.ids.map((id) => integer(id, "账号 ID", 1, Number.MAX_SAFE_INTEGER)),
+    ),
+  ];
+  const where = oneOf("id", ids);
+  if (action === "check") {
+    const results = await db(c.env).select<OutlookAccount>("accounts", {
+      where,
+    });
+    const checks: { id: number; success: boolean; message: string }[] = [];
+    for (let i = 0; i < results.length; i += 3)
+      checks.push(
+        ...(await Promise.all(
+          results.slice(i, i + 3).map(async (account) => {
+            const result = await checkOutlook(c.env, account);
+            return {
+              id: account.id,
+              success: !result.error,
+              message: result.error?.message || "连接正常",
+            };
+          }),
+        )),
+      );
+    return c.json({
+      success: true,
+      data: checks,
+      message: `完成 ${checks.length} 个连接检查`,
+    });
+  }
+  if (action === "move") {
+    const group = integer(body.group_id, "分组", 1, 1000000);
+    await assertGroup(c.env, group);
+    await db(c.env).mutate([
+      update("accounts", where, { group_id: group, updated_at: now() }),
+    ]);
+  } else if (action === "tag" || action === "untag") {
+    const tag = integer(body.tag_id, "标签", 1, 1000000);
+    if (!(await db(c.env).first("tags", eq("id", tag)))) invalid("标签不存在");
+    if (action === "tag") {
+      const accounts = await db(c.env).select("accounts", {
+        where,
+        columns: ["id"],
+      });
+      await db(c.env).mutate([
+        {
+          op: "insert",
+          table: "account_tags",
+          rows: accounts.map((a) => ({ account_id: a.id, tag_id: tag })),
+          conflict: "ignore",
+        },
+      ]);
+    } else
+      await db(c.env).mutate([
+        remove(
+          "account_tags",
+          and(eq("tag_id", tag), oneOf("account_id", ids)),
+        ),
+      ]);
+  } else if (action === "delete") {
+    await db(c.env).mutate([remove("accounts", where)]);
+  } else
+    await db(c.env).mutate([
+      update("accounts", where, {
+        status: action === "enable" ? "active" : "disabled",
+        updated_at: now(),
+      }),
+    ]);
+  return c.json({ success: true, message: `已处理 ${ids.length} 个账号` });
+});
+app.get("/accounts/:id", async (c) => {
+  const account = await getAccount(
+    c.env,
+    integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER),
+  );
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  return c.json({ success: true, data: account });
+});
+app.put("/accounts/:id", async (c) => {
+  const account = await getAccount(
+    c.env,
+    integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER),
+  );
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const body = object(await c.req.json());
+  if (body.email !== undefined && body.email !== account.email)
+    invalid("邮箱地址不可修改，请添加新账号后调整平台绑定");
+  const updated = validateAccount({
+    ...account,
+    ...body,
+    email: account.email,
+  });
+  const group = integer(body.group_id, "分组", 1, 1000000, account.group_id);
+  const status = choice(
+    body.status,
+    "状态",
+    ["active", "disabled"],
+    account.status === "active" ? "active" : "disabled",
+  );
+  await assertGroup(c.env, group);
+  const changed =
+    updated.client_id !== account.client_id ||
+    updated.refresh_token !== account.refresh_token;
+  await db(c.env).mutate([
+    update("accounts", eq("id", account.id), {
+      password: updated.password,
+      client_id: updated.client_id,
+      refresh_token: updated.refresh_token,
+      remark: updated.remark,
+      group_id: group,
+      status,
+      auth_status: changed ? "unchecked" : account.auth_status,
+      last_error: changed ? "" : account.last_error,
+      last_error_code: changed ? "" : account.last_error_code,
+      last_checked_at: changed ? "" : account.last_checked_at,
+      ...(changed
+        ? {
+            last_token_refresh_at: "",
+            last_token_attempt_at: "",
+            next_token_refresh_at: "",
+            token_refresh_failures: 0,
+            token_refresh_status: "pending",
+            token_refresh_error: "",
+          }
+        : {}),
+      updated_at: now(),
+    }),
+  ]);
+  return c.json({ success: true, message: "账号已更新" });
+});
+app.post("/accounts/:id/check", async (c) => {
+  const account = await getAccount(c.env, c.req.param("id"));
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const result = await checkOutlook(c.env, account);
+  return result.error
+    ? c.json(outlookFailure(result.error), 400)
+    : c.json({ success: true, message: "微软邮件连接正常" });
+});
+app.post("/accounts/:id/send", async (c) => {
+  const account = await getAccount(
+    c.env,
+    integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER),
+  );
+  if (!account)
+    return c.json(
+      { success: false, error: "ACCOUNT_NOT_FOUND", message: "账号不存在" },
+      404,
+    );
+  const result = await sendOutlookMail(c.env, account, await c.req.json());
+  if (result.error) {
+    if (result.error.retry_after)
+      c.header("Retry-After", String(result.error.retry_after));
+    return c.json(outlookFailure(result.error), outboundStatus(result.error));
+  }
+  return c.json({ success: true, data: result.data }, 202);
+});
+app.post("/accounts/:id/messages/:messageId/reply", async (c) => {
+  const account = await getAccount(
+    c.env,
+    integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER),
+  );
+  if (!account)
+    return c.json(
+      { success: false, error: "ACCOUNT_NOT_FOUND", message: "账号不存在" },
+      404,
+    );
+  const result = await replyOutlookMail(
+    c.env,
+    account,
+    c.req.param("messageId"),
+    await c.req.json(),
+  );
+  if (result.error) {
+    if (result.error.retry_after)
+      c.header("Retry-After", String(result.error.retry_after));
+    return c.json(outlookFailure(result.error), outboundStatus(result.error));
+  }
+  return c.json({ success: true, data: result.data }, 202);
+});
+app.get("/accounts/:id/code", async (c) => {
+  const account = await getAccount(c.env, c.req.param("id"));
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const result = await outlookCode(c.env, account, {
+    since: since(c.req.query("since")),
+    sender: text(c.req.query("sender"), "发件人", 254),
+    keyword: text(c.req.query("q"), "关键词", 200),
+  });
+  return result.error
+    ? c.json(outlookFailure(result.error), 400)
+    : c.json({ success: true, data: result.data });
+});
+app.get("/accounts/:id/emails", async (c) => {
+  const folder = choice(c.req.query("folder"), "文件夹", FOLDERS, "inbox");
+  const nextLink = text(c.req.query("cursor"), "分页链接", 16000);
+  if (nextLink && !validNextLink(nextLink, folder))
+    invalid("分页链接无效，请重新加载邮件");
+  const options = {
+    folder,
+    top: integer(c.req.query("top"), "邮件数量", 1, 50, 20),
+    keyword: text(c.req.query("q"), "关键词", 200),
+    nextLink: nextLink || undefined,
+    includeBody: true,
+  };
+  const account = await getAccount(c.env, c.req.param("id"));
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const result = await withOutlook(c.env, account, (token) =>
+    fetchEmails(token, options),
+  );
+  return result.error
+    ? c.json(outlookFailure(result.error), 400)
+    : c.json({
+        success: true,
+        data: result.data.items.map(({ body, ...mail }) => {
+          const info = extractVerificationInfo(
+            mail.subject,
+            mail.bodyPreview,
+            body?.content,
+          );
+          return {
+            ...mail,
+            verification_code: info.code,
+            verification_link: info.link,
+          };
+        }),
+        next_cursor: result.data.nextLink || "",
+      });
+});
+app.get("/accounts/:id/messages/:message", async (c) => {
+  const account = await getAccount(c.env, c.req.param("id"));
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const result = await withOutlook(c.env, account, async (token) => {
+    const message = await fetchMessage(token, c.req.param("message"));
+    if (message.error) return message;
+    const attachments = message.data.hasAttachments
+      ? await fetchAttachments(token, message.data.id)
+      : { data: [] };
+    const verification = extractVerificationInfo(
+      message.data.subject || "",
+      message.data.bodyPreview || "",
+      message.data.body?.content || "",
+    );
+    return {
+      data: {
+        ...message.data,
+        verification_code: verification.code,
+        verification_link: verification.link,
+        attachments: attachments.data || [],
+        attachment_error: attachments.error?.message || "",
+      },
+    };
+  });
+  return result.error
+    ? c.json(outlookFailure(result.error), 400)
+    : c.json({ success: true, data: result.data });
+});
+app.get(
+  "/accounts/:id/messages/:message/attachments/:attachment",
+  async (c) => {
+    const account = await getAccount(c.env, c.req.param("id"));
+    if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+    const result = await withOutlook(c.env, account, (token) =>
+      downloadAttachment(
+        token,
+        c.req.param("message"),
+        c.req.param("attachment"),
+      ),
+    );
+    if (result.error) return c.json(outlookFailure(result.error), 400);
+    const headers = new Headers({
+      "Content-Type":
+        result.data.headers.get("Content-Type") || "application/octet-stream",
+      "Content-Disposition": "attachment",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    });
+    return new Response(result.data.body, { headers });
+  },
+);
+app.delete("/accounts/:id/messages/:message", async (c) => {
+  const account = await getAccount(c.env, c.req.param("id"));
+  if (!account) return c.json({ success: false, message: "账号不存在" }, 404);
+  const result = await withOutlook(c.env, account, (token) =>
+    deleteMessage(token, c.req.param("message")),
+  );
+  return result.error
+    ? c.json(outlookFailure(result.error), 400)
+    : c.json({
+        success: true,
+        message: "微软已确认删除邮件，可在微软邮箱中检查结果",
+      });
+});
+app.delete("/accounts/:id", async (c) => {
+  const [result] = await db(c.env).mutate([
+    remove(
+      "accounts",
+      eq(
+        "id",
+        integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER),
+      ),
+    ),
+  ]);
+  return result.changes
+    ? c.json({ success: true, message: "托管账号已删除，平台台账仍保留" })
+    : c.json({ success: false, message: "账号不存在" }, 404);
+});
 export default app;

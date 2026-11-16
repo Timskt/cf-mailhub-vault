@@ -1,0 +1,9 @@
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!connector/
+!connector/**
+!src/
+!src/storage/
+!src/storage/model.ts
