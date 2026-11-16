@@ -314,7 +314,7 @@ test("restore examples send the caller's stable Idempotency-Key in all languages
 test("OpenAPI covers every concrete route, has unique stable IDs and valid executable example schemas", () => {
   const spec = openApi();
   assert.equal(spec.openapi, "3.1.0");
-  assert.equal(operations.length, 127);
+  assert.equal(operations.length, 138);
   for (const [path, method, operationId] of [
     ["/api/outlook/oauth/start", "post", "startOutlookOAuth"],
     ["/api/outlook/oauth/callback", "get", "finishOutlookOAuth"],
@@ -810,9 +810,9 @@ test("incremental CF mail retrieval and mark_read=false preserve unread state wh
   }
 });
 
-test("2.4 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
+test("2.5 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
   const spec = openApi();
-  assert.equal(API_VERSION, "2.4.0");
+  assert.equal(API_VERSION, "2.5.0");
   assert.equal(spec.info.version, API_VERSION);
   const entry = (operationId: string) => {
     const operation = operations.find((o) => o.operationId === operationId)!;
@@ -1927,8 +1927,8 @@ test("backup manifest, encrypted export, both previews and actual atomic restore
     );
     responseConforms("getBackupManifest", manifest.data);
     assert.equal(manifest.data.data.restore_available, true);
-    assert.equal(manifest.data.data.tables.length, 12);
-    assert.equal(manifest.data.data.schema_version, 11);
+    assert.equal(manifest.data.data.tables.length, 13);
+    assert.equal(manifest.data.data.schema_version, 12);
     assert.ok(manifest.data.data.tables.includes("platforms"));
     assert.ok(manifest.data.data.excluded.includes("R2 object contents"));
     const redacted = await f.request(

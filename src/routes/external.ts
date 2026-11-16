@@ -1,3 +1,4 @@
+import { resolveTarget, AutomationError, automationError } from "../automation";
 import { Hono } from "hono";
 import { securityMiddleware } from "../auth";
 import { lookupCode } from "../codes";
@@ -5,12 +6,20 @@ import { prepareMailbox } from "../domains";
 import { outlookFailure } from "../outlook";
 import { db, insert } from "../storage/client";
 import type { Env } from "../types";
-import { email, invalid, object, since, text } from "../validation";
+import { choice, email, invalid, object, since, text } from "../validation";
 const app = new Hono<{ Bindings: Env }>();
 app.use("*", securityMiddleware());
 app.get("/code", async (c) => {
   let address = c.req.query("email") ? email(c.req.query("email")) : "";
-  let source = "";
+  let source = c.req.query("source")
+    ? choice(c.req.query("source"), "邮箱来源", [
+        "cf_domain",
+        "outlook",
+        "mailtm",
+        "mailgw",
+      ])
+    : "";
+  if (source && !address) invalid("source 只用于明确的 email 目标");
   const platform = text(c.req.query("platform"), "平台名称", 100).trim();
   if (!address && platform) {
     const matches = {
@@ -29,14 +38,16 @@ app.get("/code", async (c) => {
     source = matches.results[0]?.email_source || "";
   }
   if (!address) invalid("请提供 email 或唯一的 platform");
-  if (!source)
-    source = (await db(c.env).first("accounts", {
-      field: "email",
-      op: "ieq",
-      value: address,
-    }))
-      ? "outlook"
-      : "cf_domain";
+  if (!source) {
+    try {
+      source = (
+        await resolveTarget(c.env, { email: address, source: undefined })
+      ).source;
+    } catch (error) {
+      if (!(error instanceof AutomationError)) throw error;
+      return c.json(automationError(error), error.status as 400);
+    }
+  }
   const result = await lookupCode(c.env, address, source, {
     since: since(c.req.query("since")),
     sender: text(c.req.query("sender"), "发件人", 254),

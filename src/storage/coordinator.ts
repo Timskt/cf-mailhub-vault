@@ -30,6 +30,7 @@ export const PORTABLE_BACKUP_TABLES = [
   "temp_emails",
   "temp_mailboxes",
   "domains",
+  "provider_accounts",
 ] as const satisfies readonly Table[];
 export const BACKUP_PREFERENCES = [
   "default_prefix",

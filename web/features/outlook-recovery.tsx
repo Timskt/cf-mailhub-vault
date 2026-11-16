@@ -1,3 +1,4 @@
+import { CredentialField } from "@/components/credential-field";
 import {
   ActionError,
   BusyButton,
@@ -157,6 +158,10 @@ function OutlookRecoveryContent({
   const accountId = savedAccount?.id ?? target.id;
   const recovery = useResource<Recovery>(
     accountId ? `/api/outlook/accounts/${accountId}/recovery` : null,
+    w.revision,
+  );
+  const credentials = useResource<Outlook>(
+    accountId ? `/api/outlook/accounts/${accountId}` : null,
     w.revision,
   );
   const account = recovery.result?.data.account ?? savedAccount;
@@ -537,6 +542,42 @@ function OutlookRecoveryContent({
           }}
         >
           <ModalBody aria-busy={!!busy}>
+            {accountId && (
+              <section
+                className="flex min-w-0 flex-col gap-3 rounded-lg border p-4"
+                aria-label="已保存的账号信息"
+              >
+                <h3 className="text-sm font-medium">已保存的账号信息</h3>
+                {credentials.error ? (
+                  <ErrorState
+                    message={credentials.error}
+                    retry={credentials.reload}
+                  />
+                ) : !credentials.result ? (
+                  <Loading />
+                ) : (
+                  <>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="min-w-0 break-all text-sm">
+                        {credentials.result.data.email}
+                      </span>
+                      <CopyAction
+                        value={credentials.result.data.email}
+                        label="邮箱"
+                      />
+                    </div>
+                    <CredentialField
+                      label="账号密码"
+                      value={credentials.result.data.password || ""}
+                      placeholder="此账号尚未保存密码"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      使用以上邮箱和密码登录微软；完成授权后，平台会保存新的收件凭据。
+                    </p>
+                  </>
+                )}
+              </section>
+            )}
             {completed && (
               <Alert role="status">
                 <CheckCircle2 />

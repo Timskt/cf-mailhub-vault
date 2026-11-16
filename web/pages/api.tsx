@@ -769,6 +769,8 @@ function MailboxDiagnostic({ onOpen }: { onOpen: () => void }) {
                   ["", "自动识别"],
                   ["outlook", "Outlook"],
                   ["cf_domain", "自建域名"],
+                  ["mailtm", "Mail.tm"],
+                  ["mailgw", "Mail.gw"],
                 ]}
               />
               <ActionError message={action.error} />

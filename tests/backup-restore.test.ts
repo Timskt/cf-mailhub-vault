@@ -56,6 +56,7 @@ async function setup() {
     "temp_emails",
     "temp_mailboxes",
     "domains",
+    "provider_accounts",
   ] as const;
   const tables = Object.fromEntries(business.map((t) => [t, [] as Row[]]));
   tables.groups = [{ ...defaults("groups"), id: 1, name: "Restored" }];
@@ -495,8 +496,8 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
   const f = await httpFixture();
   try {
     const manifest = await f.request("/manifest");
-    assert.equal(manifest.data.data.schema_version, 11);
-    assert.equal(manifest.data.data.tables.length, 12);
+    assert.equal(manifest.data.data.schema_version, 12);
+    assert.equal(manifest.data.data.tables.length, 13);
     assert.equal(manifest.data.data.restore_available, true);
     const backup = await f.exportFile();
     const document = await openBackup(backup, PASSPHRASE);
@@ -607,7 +608,9 @@ async function legacyBackup(
   document: BackupDocument,
 ): Promise<LegacyBackupDocument> {
   const copy = structuredClone(document);
-  const { platforms: _platforms, ...tables } = copy.tables;
+  const { platforms: _platforms, provider_accounts: _providers, ...tables } = copy.tables;
+  delete copy.manifest.table_counts.provider_accounts;
+  delete copy.manifest.table_hashes.provider_accounts;
   delete copy.manifest.table_counts.platforms;
   delete copy.manifest.table_hashes.platforms;
   return rehash({
@@ -647,8 +650,8 @@ test("schema 10 encrypted backups validate the released schema before determinis
       original,
       "conversion must not rewrite the uploaded document",
     );
-    assert.equal(converted.manifest.schema_version, 11);
-    assert.equal(Object.keys(converted.tables).length, 12);
+    assert.equal(converted.manifest.schema_version, 12);
+    assert.equal(Object.keys(converted.tables).length, 13);
     assert.deepEqual(
       converted.tables.platform_vault,
       legacy.tables.platform_vault,
@@ -742,7 +745,7 @@ test("schema 10 cannot smuggle schema 11 tables or new fields and rejects origin
         d.manifest.schema_hash = current.manifest.schema_hash;
       },
       (d: LegacyBackupDocument) => {
-        d.manifest.schema_version = 12 as 10;
+        d.manifest.schema_version = 99 as 10;
       },
       (d: LegacyBackupDocument) => {
         (d.tables as any).platforms = current.tables.platforms;
@@ -776,7 +779,7 @@ test("schema 10 cannot smuggle schema 11 tables or new fields and rejects origin
     );
     await assert.rejects(validateBackup(changed), /整体哈希/);
     const disguised = structuredClone(current);
-    disguised.manifest.schema_version = 10 as 11;
+    disguised.manifest.schema_version = 10 as 12;
     disguised.manifest.schema_hash = SCHEMA_10_HASH;
     await assert.rejects(validateBackup(disguised));
     assert.equal((await f.coordinator.status()).active.generation, "legacy");
@@ -804,7 +807,7 @@ test("backup validation rejects authenticated schema, type, reference, uniquenes
     await assert.rejects(openBackup(backup, "wrong-passphrase-1234"));
     for (const change of [
       (d: BackupDocument) => {
-        d.manifest.schema_version = 7 as 11;
+        d.manifest.schema_version = 7 as 12;
       },
       (d: BackupDocument) => {
         d.tables.accounts[0].id = "1";

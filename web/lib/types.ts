@@ -70,6 +70,7 @@ export interface MailboxHealth {
     | "manage_outlook"
     | "check_outlook"
     | "manage_domains"
+    | "manage_provider"
     | null;
   account_id?: number;
   checked_at?: string;
@@ -200,6 +201,7 @@ export interface Preview {
 export type PageName =
   | "vault"
   | "outlook"
+  | "providers"
   | "mailboxes"
   | "inbox"
   | "rules"

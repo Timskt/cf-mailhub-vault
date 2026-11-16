@@ -19,7 +19,7 @@
 
 单次请求返回 `data`、HTTP `status`、`request_id`、`retry_after`、`idempotency_replayed` 和 `idempotency_key_expires_at`。异常类型 `MailHubError` 保留 `code`、`status`、`request_id`、`retry_after`、`retryable` 和结构化 `details`，不把底层网络异常中的地址或凭据原样输出。
 
-`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain"`。查收还支持 `since`、`sender` 和 `q`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
+`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain" | "mailtm" | "mailgw"`。查收还支持 `since`、`sender` 和 `q`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
 
 ## TypeScript
 

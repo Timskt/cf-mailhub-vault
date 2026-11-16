@@ -1,8 +1,8 @@
-/** API 2.2.0: wire fields retain the server's snake_case names. */
+/** API 2.5.0: wire fields retain the server's snake_case names. */
 export type Target =
   | {
       email: string;
-      source?: "cf_domain" | "outlook";
+      source?: "cf_domain" | "outlook" | "mailtm" | "mailgw";
       vault_id?: never;
       platform?: never;
     }
@@ -15,7 +15,8 @@ export type VerificationRequest = Target & {
 };
 export interface Verification {
   email: string;
-  source: "cf_domain" | "outlook" | "gptmail" | "external";
+  source:
+    "cf_domain" | "outlook" | "mailtm" | "mailgw" | "gptmail" | "external";
   vault_id?: number;
   outcome: "found" | "empty";
   has_mail: boolean;
@@ -55,6 +56,7 @@ export interface MailboxInspection {
       | "manage_outlook"
       | "check_outlook"
       | "manage_domains"
+      | "manage_provider"
       | null;
     account_id?: number;
     checked_at?: string;

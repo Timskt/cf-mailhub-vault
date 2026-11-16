@@ -1,3 +1,4 @@
+import { isMailProvider, type ProviderAccount } from "../shared/mail-providers";
 import { getDomains, type MailDomain } from "./domains";
 import { collect, db, type Filter } from "./storage/client";
 import type { Env, OutlookAccount, PlatformAccount } from "./types";
@@ -22,6 +23,7 @@ export interface MailboxHealth {
     | "manage_outlook"
     | "check_outlook"
     | "manage_domains"
+    | "manage_provider"
     | null;
   account_id?: number;
   checked_at?: string;
@@ -190,12 +192,62 @@ function domainHealth(domain?: MailDomain): MailboxHealth {
     needs_attention: false,
   };
 }
+function providerHealth(account?: ProviderAccount): MailboxHealth {
+  const base = {
+    needs_attention: true,
+    can_lookup: !!account && account.status === "active",
+    action: "manage_provider" as const,
+    account_id: account?.id,
+    checked_at: account?.last_checked_at || undefined,
+  };
+  if (!account)
+    return {
+      ...base,
+      state: "missing",
+      label: "外部邮箱未接入",
+      message: "请在外部邮箱中接入此账号，填写邮箱和密码。",
+    };
+  if (account.status !== "active")
+    return {
+      ...base,
+      state: "disabled",
+      label: "外部邮箱已停用",
+      message: "请在外部邮箱中启用账号后查收。",
+    };
+  if (["error", "reauth_required"].includes(account.auth_status))
+    return {
+      ...base,
+      state: account.auth_status as "error" | "reauth_required",
+      label: "外部邮箱连接异常",
+      message: account.last_error || "请更新邮箱密码并测试连接。",
+    };
+  if (account.auth_status !== "healthy" || !account.last_checked_at)
+    return {
+      ...base,
+      state: "unchecked",
+      label: "外部邮箱待检查",
+      message: "已保存账号，请测试连接以确认收件。",
+      needs_attention: false,
+    };
+  const stale =
+    !Number.isFinite(Date.parse(account.last_checked_at)) ||
+    Date.now() - Date.parse(account.last_checked_at) > 86400000;
+  return {
+    ...base,
+    state: stale ? "stale" : "connected",
+    label: stale ? "外部邮箱需复查" : "外部邮箱已连接",
+    message: stale
+      ? "距上次收件检查已超过一天，请复查。"
+      : "最近收件连接成功；临时邮箱保留期限由服务商决定。",
+    needs_attention: false,
+  };
+}
 /** Read only health projections: never load credentials or call Microsoft while listing. */
 export async function enrichVault<T extends MailReference & { status: string }>(
   env: Env,
   rows: T[],
 ): Promise<EnrichedVault<T>[]> {
-  const [outlook, domains] = await Promise.all([
+  const [outlook, domains, providers] = await Promise.all([
     rows.some((r) => r.email_source === "outlook")
       ? collect<OutlookHealth>(db(env), "accounts", {
           columns: [
@@ -211,9 +263,26 @@ export async function enrichVault<T extends MailReference & { status: string }>(
         })
       : [],
     rows.some((r) => r.email_source === "cf_domain") ? getDomains(env) : [],
+    rows.some((r) => isMailProvider(r.email_source))
+      ? collect<ProviderAccount>(db(env), "provider_accounts", {
+          columns: [
+            "id",
+            "provider",
+            "address",
+            "status",
+            "auth_status",
+            "last_checked_at",
+            "last_error",
+          ],
+          order: [["id", "asc"]],
+        })
+      : [],
   ]);
   const accounts = new Map(outlook.map((a) => [a.email.toLowerCase(), a]));
   const mailDomains = new Map(domains.map((d) => [d.domain, d]));
+  const providerAccounts = new Map(
+    providers.map((p) => [`${p.provider}:${p.address.toLowerCase()}`, p]),
+  );
   return rows.map((row) => {
     const address = row.account_email.toLowerCase();
     const mailbox: MailboxHealth =
@@ -221,14 +290,18 @@ export async function enrichVault<T extends MailReference & { status: string }>(
         ? outlookHealth(accounts.get(address))
         : row.email_source === "cf_domain"
           ? domainHealth(mailDomains.get(address.split("@")[1]))
-          : {
-              state: "external",
-              label: "外部邮箱 · 手动查收",
-              message: "该邮箱来源暂不支持自动收件，请在邮箱服务商处查收。",
-              needs_attention: false,
-              can_lookup: false,
-              action: null,
-            };
+          : isMailProvider(row.email_source)
+            ? providerHealth(
+                providerAccounts.get(`${row.email_source}:${address}`),
+              )
+            : {
+                state: "external",
+                label: "外部邮箱 · 手动查收",
+                message: "该邮箱来源暂不支持自动收件，请在邮箱服务商处查收。",
+                needs_attention: false,
+                can_lookup: false,
+                action: null,
+              };
     return {
       ...row,
       mailbox,

@@ -1,6 +1,6 @@
 # MailHub & Vault 开发者指南
 
-契约版本 **2.4.0**，共 **127 个 HTTP 操作**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
+契约版本 **2.5.0**，共 **138 个 HTTP 操作**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
 
 - [OpenAPI 3.1](http://localhost:8787/openapi.json)：用于生成类型、客户端、导入 API 工具。
 - [Postman 集合](http://localhost:8787/postman.json)：设置 base_url 和 api_key 后选择请求。
@@ -61,7 +61,7 @@ curl --fail-with-body "$MAILHUB_URL/api/automation/verification" \
 ```
 
 
-email、vault_id、platform 三者只能提供一个。平台有多个账号返回 AMBIGUOUS_TARGET；请改用具体 ID 或邮箱。email 可显式提供 source=outlook/cf_domain。未知来源不会伪装为正常的空自建邮箱，可先 inspectMailbox 查看原因。Outlook 查收扫描收件箱和垃圾箱，最多各 25 封；CF 最多最近 25 封匹配邮件。limited=true 表示扫描窗口可能不足，应收窄 since/sender/q。
+email、vault_id、platform 三者只能提供一个。平台有多个账号返回 AMBIGUOUS_TARGET；请改用具体 ID 或邮箱。email 可显式提供 source=outlook/cf_domain/mailtm/mailgw。未知来源不会伪装为正常的空自建邮箱，可先 inspectMailbox 查看原因。Outlook 查收扫描收件箱和垃圾箱，最多各 25 封；CF 最多最近 25 封匹配邮件。limited=true 表示扫描窗口可能不足，应收窄 since/sender/q。
 
 新自动化接口统一响应：
 
@@ -355,9 +355,11 @@ HTTP 框架把 receiveMailHubWebhook 的 status 原样返回；config.secret 来
 
 ## 便携业务备份与恢复
 
-GET /api/backups/manifest 是当前范围的权威入口，名称为 **便携业务备份**，format=mailhub-backup、文件 version=1、schema_version=11。共 12 张业务表：settings（仅 default_prefix/mail_retention_days/token_refresh_batch/default_mail_domain）、groups、tags、accounts、account_tags、cf_inbox_mails、mail_rules、platforms、platform_vault、temp_emails、temp_mailboxes、domains。**全部表合计最多 1000 条，明文 JSON 含清单最多 1 MiB**；导出还会预留清单空间。大数据量请使用数据源迁移或数据库原生备份。
+GET /api/backups/manifest 是当前范围的权威入口，名称为 **便携业务备份**，format=mailhub-backup、文件 version=1、schema_version=12。共 13 张业务表：settings（仅 default_prefix/mail_retention_days/token_refresh_batch/default_mail_domain）、groups、tags、accounts、account_tags、cf_inbox_mails、mail_rules、platforms、platform_vault、temp_emails、temp_mailboxes、domains、provider_accounts。**全部表合计最多 1000 条，明文 JSON 含清单最多 1 MiB**；导出还会预留清单空间。大数据量请使用数据源迁移或数据库原生备份。
 
-platforms 包含空平台、名称、官网、分类、备注、置顶和时间戳；完整恢复会替换目标的平台目录。兼容已发布的 schema 10（原 11 表）：先校验原始 schema hash、完整字段集合、逐表/整体 hash 和业务关联，再根据 platform_vault 按 ID 顺序、平台名去空格且不区分大小写生成目录，保留全部原账号字段，计算 schema 11 摘要。目录采用首条账号的名称、安全官网、分类及时间；平台备注为空、置顶为 0，账号自己的备注和置顶仍保留在账号上。转换是确定性的，不修改上传文件；返回的 table_counts/backup_hash 对应转换后文档。派生平台也计入 1000 行/1 MiB 上限，超过时明确拒绝。旧脱敏明文仍仅能预览，旧包含凭据的备份仍必须加密；未知版本、新字段、篡改或伪改版本号均拒绝。
+provider_accounts 保存外部邮箱身份、密码和登录令牌，不备份服务商邮件。schema 11 原 12 张表也先校验冻结的原投影与哈希，再补空的 provider_accounts 升级到 schema 12；schema 10 则先派生 platforms，再补齐 provider_accounts。
+
+platforms 包含空平台、名称、官网、分类、备注、置顶和时间戳；完整恢复会替换目标的平台目录。schema 10 兼容路径先校验原始 schema hash、完整字段集合、逐表/整体 hash 和业务关联，再根据 platform_vault 按 ID 顺序、平台名去空格且不区分大小写生成目录，保留全部原账号字段，补空的 provider_accounts 并计算 schema 12 摘要。目录采用首条账号的名称、安全官网、分类及时间；平台备注为空、置顶为 0，账号自己的备注和置顶仍保留在账号上。转换是确定性的，不修改上传文件；返回的 table_counts/backup_hash 对应转换后文档。派生平台也计入 1000 行/1 MiB 上限，超过时明确拒绝。旧脱敏明文仍仅能预览，旧包含凭据的备份仍必须加密；未知版本、新字段、篡改或伪改版本号均拒绝。
 
 管理员/会话密钥、API Keys、OAuth 会话、幂等记录、审计、Webhook 配置及队列、数据源连接/协调器状态、Worker 配置/Secrets、**R2 对象内容均排除**。JSON 只保留 raw_object_key/attachment_manifest 引用，原始邮件和附件须单独备份并先恢复到目标 R2 桶。域名 DNS/Email Routing、微软授权与目标环境配置也须另外准备。manifest.external_dependencies/excluded 会逐项列明。
 
@@ -417,7 +419,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 
 ## 接口索引
 
-共 127 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
+共 138 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
 
 | operationId | 方法与路径 | 认证 / grants | 成功状态 | 用途 |
 | --- | --- | --- | --- | --- |
@@ -548,3 +550,14 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | customMailboxLegacy | POST `/api/mailbox/custom` | admin / mailbox:write | 200 | 兼容自定义邮箱 |
 | listMailLegacy | GET `/api/emails/list` | admin / admin | 200 | 兼容邮件列表 |
 | getMailLegacy | GET `/api/emails/view/{id}` | admin / admin | 200 | 兼容邮件正文 |
+| listMailProviders | GET `/api/providers` | admin / admin | 200 | 读取已接入的临时邮箱服务商与账号数 |
+| listProviderDomains | GET `/api/providers/{provider}/domains` | admin / admin | 200 | 读取服务商可用域名 |
+| listProviderAccounts | GET `/api/providers/accounts` | admin / admin | 200 | 分页读取外部邮箱账号 |
+| connectProviderAccount | POST `/api/providers/accounts` | admin / mailbox:write | 201 | 接入已有邮箱或创建外部邮箱 |
+| getProviderAccount | GET `/api/providers/accounts/{id}` | admin / admin | 200 | 读取外部邮箱详情与密码（包含凭据） |
+| updateProviderAccount | PUT `/api/providers/accounts/{id}` | admin / mailbox:write | 200 | 更新外部邮箱登录凭据和用途 |
+| removeProviderAccount | DELETE `/api/providers/accounts/{id}` | admin / mailbox:write | 200 | 移除外部邮箱接入 |
+| checkProviderAccount | POST `/api/providers/accounts/{id}/check` | admin / mailbox:write | 200 | 验证外部邮箱身份与收件连接 |
+| listProviderMessages | GET `/api/providers/accounts/{id}/messages` | admin / admin | 200 | 读取外部邮箱收件列表 |
+| getProviderMessage | GET `/api/providers/accounts/{id}/messages/{messageId}` | admin / admin | 200 | 读取外部邮件完整正文 |
+| lookupProviderVerification | GET `/api/providers/accounts/{id}/code` | admin / verify:read | 200 | 提取外部邮箱验证码或验证链接 |

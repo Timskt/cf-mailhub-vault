@@ -1,3 +1,5 @@
+import { isMailProvider, type ProviderAccount } from "../shared/mail-providers";
+import { providerCode, ProviderError } from "./mail-providers";
 import { extractVerificationInfo } from "./code-extractor";
 import type { GraphResult } from "./graph";
 import { outlookCode, type CodeResult } from "./outlook";
@@ -20,10 +22,11 @@ export async function lookupCode(
   options: CodeOptions = {},
 ): Promise<GraphResult<CodeResult>> {
   if (source === "outlook") {
-    const account = await db(env).first<OutlookAccount>(
-      "accounts",
-      { field: "email", op: "ieq", value: address },
-    );
+    const account = await db(env).first<OutlookAccount>("accounts", {
+      field: "email",
+      op: "ieq",
+      value: address,
+    });
     return account
       ? outlookCode(env, account, options)
       : {
@@ -33,6 +36,36 @@ export async function lookupCode(
             status: 404,
           },
         };
+  }
+  if (isMailProvider(source)) {
+    const account = await db(env).first<ProviderAccount>(
+      "provider_accounts",
+      and(eq("provider", source), {
+        field: "address",
+        op: "ieq",
+        value: address,
+      }),
+    );
+    if (!account)
+      return {
+        error: {
+          code: "PROVIDER_ACCOUNT_NOT_FOUND",
+          message: "该邮箱尚未接入，请在外部邮箱中添加账号",
+          status: 404,
+        },
+      };
+    try {
+      return { data: await providerCode(env, account, options) };
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      return {
+        error: {
+          code: error.code,
+          message: error.message,
+          status: error.status,
+        },
+      };
+    }
   }
   if (source !== "cf_domain")
     return {

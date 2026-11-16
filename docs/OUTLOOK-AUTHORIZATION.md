@@ -206,3 +206,7 @@ GET /api/outlook/accounts/export?auth_status=unchecked&attention=true
 
 - [Microsoft identity platform 授权码流程](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow)：PKCE、回调匹配、公共客户端不使用 Secret、授权码通常约 1 分钟等规则的官方依据。
 - 手动提取授权码与修复入口的交互思路参考 [roseforyou/cf-outlook-email](https://github.com/roseforyou/cf-outlook-email)（GPL）。本项目独立实现，未复制其代码；参考不代表与该项目或 Thunderbird 存在合作关系。
+
+## 已保存密码
+
+修复弹窗的「已保存的账号信息」直接显示邮箱和已保存密码，可隐藏或复制用于 Microsoft 登录。「编辑 Outlook 凭据」加载单账号详情后回填密码；未修改密码时保存不会覆盖后台已有值，Refresh Token 留空仍保留。平台账号编辑同样默认回显密码。没有存过密码的邮箱显示「此账号尚未保存密码」；OAuth 授权只返回令牌，不会返回邮箱登录密码。

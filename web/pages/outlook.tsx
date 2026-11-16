@@ -1,3 +1,4 @@
+import { CredentialField } from "@/components/credential-field";
 import {
   QuickVerification,
   type VerificationTarget,
@@ -762,7 +763,7 @@ export default function OutlookPage({
                       {a.email}
                     </button>
                     <div className="ml-auto">
-                      <Menu items={items(a)} />
+                      <Menu label={`${a.email} 操作`} items={items(a)} />
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -861,7 +862,36 @@ export default function OutlookPage({
     </>
   );
 }
-function OutlookEditor({
+function OutlookEditor(props: {
+  initial: Partial<Outlook>;
+  groups: Organization[];
+  close: () => void;
+}) {
+  const detail = useResource<Outlook>(
+    props.initial.id ? `/api/outlook/accounts/${props.initial.id}` : null,
+  );
+  if (props.initial.id && !detail.result)
+    return (
+      <Modal
+        title="编辑 Outlook 凭据"
+        description="正在读取已保存的账号信息。"
+        close={props.close}
+        wide
+      >
+        <ModalBody>
+          {detail.error ? (
+            <ErrorState message={detail.error} retry={detail.reload} />
+          ) : (
+            <Loading />
+          )}
+        </ModalBody>
+      </Modal>
+    );
+  return (
+    <OutlookForm {...props} initial={detail.result?.data || props.initial} />
+  );
+}
+function OutlookForm({
   initial,
   groups,
   close,
@@ -875,14 +905,14 @@ function OutlookEditor({
   const [data, setData] = useState({
     email: initial.email || "",
     client_id: initial.client_id || "",
-    password: "",
+    password: initial.password || "",
     refresh_token: "",
     group_id: initial.group_id || 1,
     status: initial.status || "active",
     remark: initial.remark || "",
   });
   const unsavedCredentials = !!(
-    data.password ||
+    data.password !== (initial.password || "") ||
     data.refresh_token ||
     data.client_id !== (initial.client_id || "") ||
     data.remark !== (initial.remark || "") ||
@@ -897,7 +927,7 @@ function OutlookEditor({
       title={initial.id ? "编辑 Outlook 凭据" : "手动添加 Outlook"}
       description={
         initial.id
-          ? "留空密码或 Refresh Token 会保留已有凭据。"
+          ? "已回显保存的密码，可直接修改或复制；Refresh Token 留空保留。"
           : "使用你自己的 Microsoft 应用与邮箱授权凭据。"
       }
       wide
@@ -912,7 +942,10 @@ function OutlookEditor({
               initial.id ? "PUT" : "POST",
               {
                 ...data,
-                password: data.password || undefined,
+                password:
+                  data.password === (initial.password || "")
+                    ? undefined
+                    : data.password,
                 refresh_token: data.refresh_token || undefined,
               },
             );
@@ -962,12 +995,11 @@ function OutlookEditor({
               value={data.email}
               onChange={(e) => set("email", e.target.value)}
             />
-            <TextField
+            <CredentialField
               label="密码（可选）"
-              type="password"
-              autoComplete="new-password"
               value={data.password}
-              onChange={(e) => set("password", e.target.value)}
+              onChange={(value) => set("password", value)}
+              disabled={action.busy}
             />
             <TextField
               label="Client ID"

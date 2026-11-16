@@ -15,6 +15,7 @@ import {
 const protectedFields: Partial<Record<Table, readonly string[]>> = {
   accounts: ["password", "refresh_token"],
   platform_vault: ["password", "totp_secret"],
+  provider_accounts: ["password", "token"],
   oauth_sessions: ["verifier"],
   webhooks: ["secret", "url"],
 };

@@ -30,7 +30,7 @@ export type ApiOperation = {
 };
 export type ApiGrant =
   "verify:read" | "mailbox:write" | "vault:read" | "vault:write" | "admin";
-export const API_VERSION = "2.4.0";
+export const API_VERSION = "2.5.0";
 export const s = (maxLength?: number): Schema => ({
   type: "string",
   ...(maxLength ? { maxLength } : {}),
@@ -93,7 +93,14 @@ const paged = (data: Schema): Schema =>
     ["success", "data", "page", "limit", "total"],
   );
 const timestamps = { created_at: date, updated_at: date };
-const sources = strEnum("cf_domain", "outlook", "gptmail", "external");
+const sources = strEnum(
+  "cf_domain",
+  "outlook",
+  "gptmail",
+  "external",
+  "mailtm",
+  "mailgw",
+);
 const statuses = strEnum("active", "pending", "banned", "deprecated");
 const categories = strEnum(
   "general",
@@ -106,7 +113,7 @@ const targetProperties = {
   email: address,
   vault_id: id,
   platform: s(100),
-  source: strEnum("cf_domain", "outlook"),
+  source: strEnum("cf_domain", "outlook", "mailtm", "mailgw"),
 };
 const targetRules = [
   obj({ ...targetProperties, vault_id: { not: {} }, platform: { not: {} } }, [
@@ -295,6 +302,7 @@ const apiGrants = strEnum(
   "admin",
 );
 const credentialTables = strEnum(
+  "provider_accounts",
   "accounts",
   "platform_vault",
   "oauth_sessions",
@@ -342,9 +350,10 @@ const backupTables = [
   "temp_emails",
   "temp_mailboxes",
   "domains",
+  "provider_accounts",
 ];
 const legacyBackupTables = backupTables.filter(
-  (table) => table !== "platforms",
+  (table) => table !== "platforms" && table !== "provider_accounts",
 );
 const countsFor = (tables: string[]) =>
   obj(
@@ -353,7 +362,7 @@ const countsFor = (tables: string[]) =>
     false,
   );
 const backupCounts = countsFor(backupTables);
-const backupManifest = (version: 10 | 11, tables: string[]) =>
+const backupManifest = (version: 10 | 11 | 12, tables: string[]) =>
   obj(
     {
       format: { type: "string", const: "mailhub-backup" },
@@ -494,6 +503,7 @@ export const schemas: Record<string, Schema> = {
           "manage_outlook",
           "check_outlook",
           "manage_domains",
+          "manage_provider",
           null,
         ],
       },
@@ -1083,7 +1093,7 @@ export const schemas: Record<string, Schema> = {
           "table",
           "plaintext_records",
         ]),
-        4,
+        5,
       ),
     },
     ["enabled", "previous_key_available", "tables"],
@@ -1201,13 +1211,21 @@ export const schemas: Record<string, Schema> = {
     ["id", "event", "created_at", "data"],
     false,
   ),
-  BackupManifest: backupManifest(11, backupTables),
+  BackupManifest: backupManifest(12, backupTables),
   BackupDocument: backupDocument("BackupManifest", backupTables),
+  Schema11BackupManifest: backupManifest(
+    11,
+    backupTables.filter((t) => t !== "provider_accounts"),
+  ),
+  Schema11BackupDocument: backupDocument(
+    "Schema11BackupManifest",
+    backupTables.filter((t) => t !== "provider_accounts"),
+  ),
   LegacyBackupManifest: backupManifest(10, legacyBackupTables),
   LegacyBackupDocument: {
     ...backupDocument("LegacyBackupManifest", legacyBackupTables),
     description:
-      "仅兼容已发布的 schema 10：先严格校验原始 schema hash、字段及内容，再在内存中补出 platforms 并转为 schema 11。明文仅限脱敏预览。",
+      "兼容已发布的 schema 10 和 11：先严格校验原始 schema hash、字段及内容，schema 10 在内存中补出 platforms，旧版本均补出空 provider_accounts 并转为 schema 12。明文仅限脱敏预览。",
   },
   EncryptedBackup: obj(
     {
@@ -1238,7 +1256,7 @@ export const schemas: Record<string, Schema> = {
     {
       format: { type: "string", const: "mailhub-backup" },
       version: { type: "integer", const: 1 },
-      schema_version: { type: "integer", const: 11 },
+      schema_version: { type: "integer", const: 12 },
       name: { type: "string", const: "便携业务备份" },
       limits: obj(
         {
@@ -1383,6 +1401,8 @@ function grantsFor(method: ApiOperation["method"], path: string): ApiGrant[] {
     return [read ? "vault:read" : "vault:write"];
   if (/^\/api\/mailbox(?:es)?(?:\/|$)/.test(path))
     return [read ? "verify:read" : "mailbox:write"];
+  if (path.startsWith("/api/providers"))
+    return [read ? "admin" : "mailbox:write"];
   if (path.startsWith("/api/cf-mails"))
     return [read ? "admin" : "mailbox:write"];
   if (/^\/api\/outlook\/accounts\/\{id\}(?:\/|$)/.test(path))
@@ -1573,6 +1593,11 @@ op(
 op("get", "/api/external/code", "lookupCodeLegacy", "兼容取码接口", "自动化", {
   auth: "admin",
   parameters: [
+    q(
+      "source",
+      strEnum("cf_domain", "outlook", "mailtm", "mailgw"),
+      "仅用于明确 email 目标，消除同地址多个来源的歧义",
+    ),
     q("email", address, "邮箱地址", "user@example.com"),
     q("platform", s(100), "唯一平台名称，email 优先"),
     ...codeParams,
@@ -3245,7 +3270,7 @@ op(
     auth: "cookie",
     response: success(ref("BackupCapabilities")),
     description:
-      "schema 11 共 12 张业务表，包括独立 platforms（空平台也保留）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 文件。",
+      "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。",
   },
 );
 op(
@@ -3309,7 +3334,11 @@ for (const name of ["dry-run", "preview"] as const) {
           obj(
             {
               backup: {
-                oneOf: [ref("BackupDocument"), ref("LegacyBackupDocument")],
+                oneOf: [
+                  ref("BackupDocument"),
+                  ref("LegacyBackupDocument"),
+                  ref("Schema11BackupDocument"),
+                ],
               },
               passphrase: s(1024),
             },
@@ -3325,7 +3354,7 @@ for (const name of ["dry-run", "preview"] as const) {
       response: success(ref("BackupPreview")),
       effects: "不修改业务数据；认证、审计及可选幂等记录仍会更新。",
       description:
-        "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
     },
   );
 }
@@ -3571,6 +3600,247 @@ op(
     ),
     effects: "标记邮件已读",
     description: "无 success/data 包装；新接入推荐 getDomainMail。",
+  },
+);
+
+const provider = strEnum("mailtm", "mailgw");
+const providerAccount = obj(
+  {
+    id,
+    provider,
+    address,
+    remote_id: s(200),
+    status: strEnum("active", "disabled"),
+    auth_status: strEnum("unchecked", "healthy", "error", "reauth_required"),
+    remark: s(1000),
+    last_checked_at: date,
+    last_error: s(),
+    last_error_code: s(),
+    has_password: bool,
+    ...timestamps,
+  },
+  ["id", "provider", "address", "status", "auth_status", "has_password"],
+  false,
+);
+const providerMessage = obj(
+  {
+    id: s(200),
+    subject: s(),
+    sender: s(),
+    sender_name: s(),
+    created_at: date,
+    is_read: flag,
+    text_content: s(),
+    html_content: s(),
+    verification_code: s(),
+    verification_link: s(),
+    has_attachments: bool,
+  },
+  [
+    "id",
+    "subject",
+    "sender",
+    "created_at",
+    "text_content",
+    "html_content",
+    "verification_code",
+    "verification_link",
+  ],
+  false,
+);
+op(
+  "get",
+  "/api/providers",
+  "listMailProviders",
+  "读取已接入的临时邮箱服务商与账号数",
+  "外部邮箱",
+  {
+    response: success(
+      arr(
+        obj(
+          {
+            id: provider,
+            name: s(),
+            url: s(),
+            docs: s(),
+            account_count: n(),
+            attention_count: n(),
+            capabilities: arr(s()),
+          },
+          ["id", "name", "account_count", "attention_count"],
+        ),
+      ),
+    ),
+  },
+);
+op(
+  "get",
+  "/api/providers/{provider}/domains",
+  "listProviderDomains",
+  "读取服务商可用域名",
+  "外部邮箱",
+  {
+    description:
+      "provider 仅支持 mailtm/mailgw。固定访问官方端点，返回该页活动且公开的域名。每页最多 30 条，total 为服务商原始域名总数（可能含被过滤项）。不自动创建账号。",
+    parameters: [q("page", n(1, 1000), "服务商页码")],
+    response: paged(obj({ domain: s(253) }, ["domain"])),
+  },
+);
+op(
+  "get",
+  "/api/providers/accounts",
+  "listProviderAccounts",
+  "分页读取外部邮箱账号",
+  "外部邮箱",
+  {
+    description:
+      "不返回密码或登录令牌。可按 provider、q、status 筛选；attention 包含启用且 error/reauth_required 的账号。",
+    parameters: [
+      ...pages,
+      q("provider", provider),
+      q("q", s(200)),
+      q("status", strEnum("all", "active", "disabled", "attention")),
+    ],
+    response: paged(providerAccount),
+  },
+);
+op(
+  "post",
+  "/api/providers/accounts",
+  "connectProviderAccount",
+  "接入已有邮箱或创建外部邮箱",
+  "外部邮箱",
+  {
+    description:
+      "mode=connect（默认）使用邮箱和密码登录并校验 /me 身份；mode=create 先保存本地凭据，再调用官方创建接口。创建失败时本地账号保留且响应 data.id 可用于修复；网络超时后先测试连接，切勿换键自动重建。登录成功不等于收件验证成功，新账号为 unchecked。推荐使用 Idempotency-Key。",
+    effects:
+      "创建本地账号，create 模式还会在服务商创建邮箱。密码与令牌纳入凭据加密和便携业务备份。",
+    body: obj(
+      {
+        provider,
+        address,
+        password: { ...s(1000), minLength: 1 },
+        mode: strEnum("connect", "create"),
+        remark: s(1000),
+      },
+      ["provider", "address", "password"],
+      false,
+    ),
+    example: {
+      provider: "mailtm",
+      address: "user@example.com",
+      password: "EXAMPLE-REPLACE-PASSWORD",
+      mode: "connect",
+    },
+    response: success(providerAccount),
+    responseStatus: 201,
+  },
+);
+op(
+  "get",
+  "/api/providers/accounts/{id}",
+  "getProviderAccount",
+  "读取外部邮箱详情与密码",
+  "外部邮箱",
+  {
+    credentials: true,
+    response: success(
+      obj(
+        {
+          ...(providerAccount.properties as Record<string, Schema>),
+          password: s(1000),
+          credential_version: s(100),
+        },
+        ["id", "address", "password", "credential_version"],
+        false,
+      ),
+    ),
+    description:
+      "管理员读取，返回可回显的密码和并发修改版本，不返回服务商令牌。响应禁止缓存，受限密钥仍须满足邮箱/平台资源限制。",
+  },
+);
+op(
+  "put",
+  "/api/providers/accounts/{id}",
+  "updateProviderAccount",
+  "更新外部邮箱登录凭据和用途",
+  "外部邮箱",
+  {
+    description:
+      "地址和服务商不可变。password 为本地登录凭据，不会调用服务商改密；变化后清空令牌并置为 unchecked。建议提交详情中的 credential_version，冲突返回 409。",
+    body: obj(
+      {
+        password: { ...s(1000), minLength: 1 },
+        remark: s(1000),
+        status: strEnum("active", "disabled"),
+        credential_version: s(100),
+      },
+      [],
+      false,
+    ),
+    response: success(providerAccount),
+  },
+);
+op(
+  "delete",
+  "/api/providers/accounts/{id}",
+  "removeProviderAccount",
+  "移除外部邮箱接入",
+  "外部邮箱",
+  {
+    description:
+      "仅移除本地接入；仍关联平台账号时拒绝。不会删除服务商上的邮箱或邮件。",
+  },
+);
+op(
+  "post",
+  "/api/providers/accounts/{id}/check",
+  "checkProviderAccount",
+  "验证外部邮箱身份与收件连接",
+  "外部邮箱",
+  {
+    description:
+      "校验 /me 与已保存身份，读取第一页收件。过期令牌会使用已存密码重登一次。结果写入连接状态。",
+    response: success(obj({ connected: bool }, ["connected"])),
+  },
+);
+op(
+  "get",
+  "/api/providers/accounts/{id}/messages",
+  "listProviderMessages",
+  "读取外部邮箱收件列表",
+  "外部邮箱",
+  {
+    parameters: [q("page", n(1, 100000), "页码，每页最多 30 封")],
+    response: paged(providerMessage),
+    effects: "读取服务商邮件；自动重登及连接健康状态会保存。不会标记已读。",
+  },
+);
+op(
+  "get",
+  "/api/providers/accounts/{id}/messages/{messageId}",
+  "getProviderMessage",
+  "读取外部邮件完整正文",
+  "外部邮箱",
+  {
+    response: success(providerMessage),
+    description:
+      "读取正文并提取验证码/链接；HTML 为不可信邮件内容，调用方应隔离渲染。附件仅返回 has_attachments，可在服务商网站查看。",
+    effects: "读取服务商邮件，保存登录与连接状态；不会标记已读。",
+  },
+);
+op(
+  "get",
+  "/api/providers/accounts/{id}/code",
+  "lookupProviderVerification",
+  "提取外部邮箱验证码或验证链接",
+  "外部邮箱",
+  {
+    parameters: codeParams,
+    response: success(ref("Code")),
+    description:
+      "第一页最多 30 封，按 since/sender 筛选后读取最新 10 封详情，再按 q 匹配正文；limited 表示窗口不足。包含列表摘要之外的链接/验证码。调用方应固定 since，间隔至少 5 秒轮询，429/错误停止并退避。",
+    effects: "读取服务商邮件，必要时重新登录并更新连接状态。",
   },
 );
 

@@ -95,3 +95,10 @@ API 更新至 2.4.0、127 个操作，增加无凭据的修复诊断与管理员
 - [Microsoft Graph 搜索](https://learn.microsoft.com/en-us/graph/search-query-parameter)
 - [Microsoft 授权码流程](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
 - [Microsoft Refresh Token](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)
+
+## 2026-11-16 外部邮箱与密码回显
+
+- Outlook 修复、Outlook 编辑、平台编辑和外部邮箱编辑回显密码，支持隐藏与复制。手机 Outlook 菜单补齐账号名称。
+- Mail.tm / Mail.gw 官方 API 账号接入、创建、域名选择、状态诊断、收件与验证信息提取；平台来源关联与统一自动化兼容。
+- 外部邮箱凭据进入统一加密存储、换库迁移和 schema 12 业务备份，兼容冻结的 schema 10/11。
+- API 2.5.0，138 个操作，更新 OpenAPI、AI 文档和 SDK 来源校验。具体能力及服务边界见 [外部邮箱](EXTERNAL-MAILBOXES.md)。

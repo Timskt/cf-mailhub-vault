@@ -267,6 +267,25 @@ export const schema = {
     },
     unique: [],
   },
+  provider_accounts: numbered(
+    {
+      provider: "mailtm",
+      address: "",
+      remote_id: "",
+      password: "",
+      token: "",
+      token_expires_at: "",
+      credential_version: "",
+      status: "active",
+      auth_status: "unchecked",
+      remark: "",
+      last_checked_at: "",
+      last_error: "",
+      last_error_code: "",
+      ...stamps,
+    },
+    [["provider", "address"]],
+  ),
 } satisfies Record<
   string,
   { key: string[]; auto: boolean; fields: Row; unique: string[][] }

@@ -1,3 +1,4 @@
+import { isMailProvider } from "../../shared/mail-providers";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
@@ -42,7 +43,10 @@ const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 // Authorization and infrastructure state must come from the current dataset, not an upload.
 export const BACKUP_TABLES = PORTABLE_BACKUP_TABLES;
 type BackupTable = (typeof BACKUP_TABLES)[number];
-type LegacyBackupTable = Exclude<BackupTable, "platforms">;
+type LegacyBackupTable = Exclude<
+  BackupTable,
+  "platforms" | "provider_accounts"
+>;
 // Frozen schema 10 projection. Never derive legacy fields from the current model:
 // adding a field in a future release must not make it admissible in an old file.
 const LEGACY_BACKUP_SCHEMA: Record<
@@ -109,6 +113,16 @@ const LEGACY_BACKUP_SCHEMA: Record<
       ),
   },
 };
+const SCHEMA_11 = {
+  ...LEGACY_BACKUP_SCHEMA,
+  platforms: {
+    key: ["name_key"],
+    fields:
+      "category created_at is_pinned name name_key remark updated_at url".split(
+        " ",
+      ),
+  },
+};
 const LEGACY_BACKUP_TABLES = Object.keys(
   LEGACY_BACKUP_SCHEMA,
 ) as LegacyBackupTable[];
@@ -130,6 +144,17 @@ const EXTERNAL_DEPENDENCIES = [
 ];
 // Positive field lists keep newly added credential/body fields out of redacted exports.
 const REDACTED: Record<BackupTable, readonly string[]> = {
+  provider_accounts: [
+    "id",
+    "provider",
+    "address",
+    "remote_id",
+    "status",
+    "auth_status",
+    "last_checked_at",
+    "created_at",
+    "updated_at",
+  ],
   settings: ["key", "value"],
   groups: ["id", "name", "color", "created_at", "updated_at"],
   tags: ["id", "name", "color", "created_at"],
@@ -214,7 +239,7 @@ const REDACTED: Record<BackupTable, readonly string[]> = {
 export interface BackupManifest {
   format: typeof FORMAT;
   version: 1;
-  schema_version: 11;
+  schema_version: 12;
   schema_hash: string;
   created_at: string;
   redacted: boolean;
@@ -233,6 +258,10 @@ export interface BackupDocument {
 export interface LegacyBackupDocument {
   manifest: Omit<BackupManifest, "schema_version"> & { schema_version: 10 };
   tables: Record<LegacyBackupTable, Row[]>;
+}
+export interface Schema11BackupDocument {
+  manifest: Omit<BackupManifest, "schema_version"> & { schema_version: 11 };
+  tables: Omit<BackupDocument["tables"], "provider_accounts">;
 }
 export interface EncryptedBackup {
   format: "mailhub-backup-encrypted";
@@ -301,7 +330,7 @@ async function encryptionKey(secret: string, salt: Uint8Array<ArrayBuffer>) {
     ["encrypt", "decrypt"],
   );
 }
-async function backupSchema(version: 10 | 11 = 11): Promise<
+async function backupSchema(version: 10 | 11 | 12 = 12): Promise<
   Record<
     string,
     {
@@ -311,6 +340,7 @@ async function backupSchema(version: 10 | 11 = 11): Promise<
   >
 > {
   if (version === 10) return LEGACY_BACKUP_SCHEMA;
+  if (version === 11) return SCHEMA_11;
   return Object.fromEntries(
     BACKUP_TABLES.map((table) => [
       table,
@@ -393,7 +423,7 @@ async function snapshot(env: Env, redacted: boolean) {
     manifest: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 11,
+      schema_version: 12,
       schema_hash: await digest(await backupSchema()),
       created_at: new Date().toISOString(),
       redacted,
@@ -411,7 +441,7 @@ async function snapshot(env: Env, redacted: boolean) {
   return { document, revision: end };
 }
 export async function sealBackup(
-  document: BackupDocument | LegacyBackupDocument,
+  document: BackupDocument | LegacyBackupDocument | Schema11BackupDocument,
   secret: string,
 ): Promise<EncryptedBackup> {
   bounded(document);
@@ -533,6 +563,7 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
     temp_emails: ["email"],
     temp_mailboxes: ["address"],
     domains: ["domain"],
+    provider_accounts: ["provider", "address"],
     mail_rules: ["name"],
   };
   for (const field of required[table] || [])
@@ -546,11 +577,13 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
       ? "email"
       : table === "platform_vault"
         ? "account_email"
-        : table === "temp_mailboxes"
+        : table === "provider_accounts"
           ? "address"
-          : table === "cf_inbox_mails"
-            ? "recipient"
-            : "";
+          : table === "temp_mailboxes"
+            ? "address"
+            : table === "cf_inbox_mails"
+              ? "recipient"
+              : "";
   if (addressField) email(row[addressField]);
   if (table === "settings") {
     if (!PREFERENCES.includes(String(row.key)))
@@ -581,6 +614,24 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
     if (!redacted) {
       httpUrl(row.url);
       text(row.remark, "平台备注", 4000);
+    }
+  }
+  if (table === "provider_accounts") {
+    if (
+      !isMailProvider(String(row.provider)) ||
+      !["active", "disabled"].includes(String(row.status)) ||
+      !["unchecked", "healthy", "error", "reauth_required"].includes(
+        String(row.auth_status),
+      )
+    )
+      invalid("外部邮箱服务商或状态无效");
+    if (row.remote_id && !/^[a-zA-Z0-9_-]{1,200}$/.test(String(row.remote_id)))
+      invalid("外部邮箱身份无效");
+    if (!redacted) {
+      if (!text(row.password, "邮箱密码", 1000)) invalid("外部邮箱缺少密码");
+      text(row.token, "邮箱令牌", 16384);
+      text(row.remark, "邮箱备注", 1000);
+      text(row.credential_version, "凭据版本", 100);
     }
   }
   if (redacted) return;
@@ -661,9 +712,10 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     "external_dependencies",
   ]);
   const version = manifest.schema_version;
-  if (version !== 10 && version !== 11) invalid("备份格式或 schema 版本不兼容");
+  if (version !== 10 && version !== 11 && version !== 12)
+    invalid("备份格式或 schema 版本不兼容");
   const model = await backupSchema(version);
-  const included = version === 10 ? LEGACY_BACKUP_TABLES : BACKUP_TABLES;
+  const included = Object.keys(model) as BackupTable[];
   if (
     manifest.format !== FORMAT ||
     manifest.version !== VERSION ||
@@ -730,7 +782,8 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     manifest.data_hash !== (await digest(data))
   )
     invalid("备份整体哈希不匹配");
-  const typed = document as unknown as BackupDocument | LegacyBackupDocument,
+  const typed = document as unknown as
+      BackupDocument | LegacyBackupDocument | Schema11BackupDocument,
     t = typed.tables;
   const has = (table: LegacyBackupTable, id: unknown) =>
     t[table].some((row) => row.id === id);
@@ -754,6 +807,32 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     }
   if (typed.manifest.schema_version === 10)
     return upgradeLegacyBackup(typed as LegacyBackupDocument);
+  if (typed.manifest.schema_version === 11) {
+    const tables = {
+      ...typed.tables,
+      provider_accounts: [],
+    } as BackupDocument["tables"];
+    return validateBackup({
+      manifest: {
+        ...typed.manifest,
+        schema_version: 12,
+        schema_hash: await digest(await backupSchema()),
+        table_counts: Object.fromEntries(
+          BACKUP_TABLES.map((table) => [table, tables[table].length]),
+        ),
+        table_hashes: Object.fromEntries(
+          await Promise.all(
+            BACKUP_TABLES.map(async (table) => [
+              table,
+              await digest(tables[table]),
+            ]),
+          ),
+        ),
+        data_hash: await digest(tables),
+      },
+      tables,
+    });
+  }
   return typed as BackupDocument;
 }
 
@@ -802,13 +881,17 @@ async function upgradeLegacyBackup(
   const tables = Object.fromEntries(
     BACKUP_TABLES.map((table) => [
       table,
-      table === "platforms" ? [...catalog.values()] : legacy.tables[table],
+      table === "platforms"
+        ? [...catalog.values()]
+        : table === "provider_accounts"
+          ? []
+          : legacy.tables[table],
     ]),
   ) as Record<BackupTable, Row[]>;
   const upgraded: BackupDocument = {
     manifest: {
       ...legacy.manifest,
-      schema_version: 11,
+      schema_version: 12,
       schema_hash: await digest(await backupSchema()),
       table_counts: Object.fromEntries(
         BACKUP_TABLES.map((table) => [table, tables[table].length]),
@@ -985,7 +1068,7 @@ app.get("/manifest", async (c) => {
     data: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 11,
+      schema_version: 12,
       name: "便携业务备份",
       limits: {
         max_plaintext_bytes: BACKUP_MAX_BYTES,

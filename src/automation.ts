@@ -96,7 +96,12 @@ export function parseTarget(input: unknown) {
     source:
       body.source === undefined
         ? undefined
-        : choice(body.source, "邮箱来源", ["cf_domain", "outlook"]),
+        : choice(body.source, "邮箱来源", [
+            "cf_domain",
+            "outlook",
+            "mailtm",
+            "mailgw",
+          ]),
   };
 }
 type Target = ReturnType<typeof parseTarget>;
@@ -161,7 +166,15 @@ export async function resolveTarget(env: Env, target: Target) {
         columns: ["email_source"],
       },
     );
+    const providers = await store.select<{ provider: string }>(
+      "provider_accounts",
+      {
+        where: { field: "address", op: "ieq", value: address },
+        columns: ["provider"],
+      },
+    );
     const candidates = new Set([
+      ...providers.map((p) => p.provider),
       ...refs.map((r) => r.email_source),
       ...(outlook ? ["outlook"] : []),
       ...(cf ? ["cf_domain"] : []),

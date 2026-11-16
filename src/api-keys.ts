@@ -223,7 +223,14 @@ export function sessionOnlyPath(path: string) {
 }
 type Policy = {
   scopes: ApiScope[];
-  resource?: "vault" | "mailbox" | "mail" | "outlook" | "target" | "register";
+  resource?:
+    | "vault"
+    | "mailbox"
+    | "mail"
+    | "outlook"
+    | "provider"
+    | "target"
+    | "register";
   id?: number;
   collection?: boolean;
 };
@@ -239,6 +246,25 @@ function policy(method: string, path: string): Policy | null {
     return { scopes: ["verify:read"], resource: "target" };
   if (path === "/api/external/register" && method === "POST")
     return { scopes: ["mailbox:write", "vault:write"], resource: "register" };
+  const providerAccount = path.match(
+    /^\/api\/providers\/accounts\/(\d+)(?:\/(code|check|messages(?:\/[^/]+)?))?$/,
+  );
+  if (providerAccount)
+    return {
+      scopes: [
+        providerAccount[2] === "code" && read
+          ? "verify:read"
+          : read
+            ? "admin"
+            : "mailbox:write",
+      ],
+      resource: "provider",
+      id: Number(providerAccount[1]),
+    };
+  if (
+    /^\/api\/providers(?:\/accounts|\/(?:mailtm|mailgw)\/domains)?$/.test(path)
+  )
+    return { scopes: [read ? "admin" : "mailbox:write"], collection: true };
   let match = path.match(
     /^\/api\/(vault|mailboxes)\/(\d+)(?:\/(code|pin|extend|toggle-permanent|link-vault))?$/,
   );
@@ -397,7 +423,9 @@ async function rowAllowed(
         ? "temp_mailboxes"
         : resource === "outlook"
           ? "accounts"
-          : "cf_inbox_mails";
+          : resource === "provider"
+            ? "provider_accounts"
+            : "cf_inbox_mails";
   const columns =
     resource === "vault"
       ? ["account_email", "platform_name"]
@@ -405,7 +433,9 @@ async function rowAllowed(
         ? ["address", "associated_platform"]
         : resource === "outlook"
           ? ["email"]
-          : ["recipient"];
+          : resource === "provider"
+            ? ["address"]
+            : ["recipient"];
   const row = await db(env).first(table, eq("id", id), { columns });
   if (!row) throw new AuthorizationError("RESOURCE_FORBIDDEN");
   await resourceAllowed(

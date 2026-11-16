@@ -67,6 +67,19 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(reply.request_id, "req-test")
         self.assertTrue(reply.idempotency_replayed)
 
+    def test_provider_sources(self):
+        calls = []
+        def transport(request, timeout):
+            calls.append(json.loads(request.data))
+            return response({"success": True, "data": EMPTY})
+        sdk = self.sdk(transport)
+        for source in ("mailtm", "mailgw"):
+            sdk.lookup_verification({"email": "owned@provider.test", "source": source})
+            self.assertEqual(calls[-1]["source"], source)
+        with self.assertRaises(Exception):
+            sdk.lookup_verification({"email": "owned@provider.test", "source": "unknown"})
+        self.assertEqual(len(calls), 2)
+
     def test_errors_and_writes_never_retry(self):
         calls = []
         def transport(request, timeout):

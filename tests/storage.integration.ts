@@ -9,6 +9,7 @@ import {
 import { connectorApp } from "../connector/server";
 import { HttpPort } from "../src/storage/http";
 import { D1Port } from "../src/storage/d1";
+import { encryptCredentialRows } from "../src/storage/secure";
 import { DirectStore } from "../src/storage/engine";
 import { Coordinator, type Source } from "../src/storage/coordinator";
 import { MemoryControl } from "./storage-support";
@@ -416,7 +417,23 @@ test(
                 secret: "masked-test",
                 created: "test",
               });
+            const providerRows = await encryptCredentialRows(
+              "provider_accounts",
+              [
+                {
+                  ...defaults("provider_accounts"),
+                  id: 1,
+                  provider: "mailtm",
+                  address: "owned@provider.test",
+                  password: "fictional-migrating-password",
+                  token: "fictional-migrating-token",
+                  credential_version: "v1",
+                },
+              ],
+              "fictional-migration-encryption-key-32-characters",
+            );
             await coordinator.mutate([
+              insert("provider_accounts", providerRows[0]),
               insert("accounts", { ...ACCOUNT }),
               insert("tags", { name: "生产", color: "#336699" }),
               insert("account_tags", { account_id: 1, tag_id: 1 }),
@@ -474,6 +491,15 @@ test(
                 await coordinator.step();
               }
               assert.ok(finished, target);
+              const provider = (
+                await coordinator.find("provider_accounts", {
+                  where: eq("id", 1),
+                })
+              )[0];
+              assert.equal(provider.password, providerRows[0].password);
+              assert.equal(provider.token, providerRows[0].token);
+              assert.match(String(provider.password), /^enc:v1:/);
+
               const state = await memory.get<any>("state"),
                 source = await factory(
                   previousConfig,

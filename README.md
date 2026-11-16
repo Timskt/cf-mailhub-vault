@@ -6,6 +6,8 @@
 
 - **数据源热切换**：同类型多个实例、不同数据库类型、不同服务器，后台全量复制与增量追平，逐页校验后切换；中断恢复、保留原数据集。支持 D1 → MySQL → MongoDB → Redis → D1。[接入与迁移文档](docs/DATABASES.md)。
 
+- **外部临时邮箱**：接入已有 Mail.tm / Mail.gw 账号或创建新邮箱，保存密码、令牌自动重登、分页收件、隔离阅读、提取验证码/验证链接，并关联平台账号；提供来源计数和异常修复入口。[接入说明](docs/EXTERNAL-MAILBOXES.md)。
+- **账号密码回显**：Outlook 修复、Outlook 编辑、平台账号编辑和外部邮箱编辑弹窗直接显示已保存密码，支持隐藏与复制；账号列表仍只返回是否已存密码。
 - **多邮件域名**：面板添加、停用、设置默认域名、备注用途，检查 MX/SPF，查看最近实际收件时间；生成邮箱时选择域名。兼容已有 `CF_DOMAINS` 配置。
 - **Outlook 工作区**：自有微软应用自动回调、公共客户端手动授权码提取、绑定邮箱的授权修复、文本/CSV/JSON 批量导入、完整 JSON 导出、编辑凭据、连接测试、真实授权状态、分组和标签，以及批量移组、加/移除标签、启停和删除托管配置。
 - **微软邮件阅读**：收件箱、垃圾箱、已删除、存档、已发送和全邮箱，搜索、分页、HTML/纯文本正文、附件下载、删除邮件。HTML 使用隔离 iframe，脚本和表单禁用，外部图片默认阻止。
@@ -21,7 +23,7 @@
 - **凭据与备份**：账号密码、Outlook 令牌、TOTP 和 Webhook 连接字段加密写入，支持旧密钥过渡与分批重加密；提供加密业务便携备份、预览和隔离数据集恢复。[恢复范围与运维步骤](docs/BACKUP-RECOVERY.md)。
 - **原始邮件与附件**：可选私有 R2 绑定保存新到 CF 邮件的原始 EML，支持原文/附件下载与延迟回收；未配置 R2 时沿用原来的正文存储。
 
-“公共临时邮箱 / 外部邮箱”目前是台账来源标记，尚未接第三方收件服务。当前不提供 IMAP/POP3 服务或多用户隔离。Cloudflare 与微软的配额、权限和服务条款仍然适用，运行费用取决于实际用量。
+Mail.tm / Mail.gw 已通过官方 API 接入；GPTMail 和通用 external 仍是手动查收来源标记。当前不提供 IMAP/POP3 服务或多用户隔离。Cloudflare 与微软的配额、权限和服务条款仍然适用，运行费用取决于实际用量。
 
 ## 本地开发
 
@@ -114,7 +116,7 @@ pnpm exec wrangler secret put MICROSOFT_CLIENT_SECRET
 
 ## 自动化 API
 
-开发者中心包含 127 个 HTTP 操作的搜索目录、接口详情抽屉、cURL / JavaScript / Python 示例、工作流与邮箱接入诊断，契约版本 2.4.0 新增手动授权兑换及安全修复诊断。设置中可创建有有效期、权限范围以及邮箱/平台限制的自动化密钥，按最小权限选择 `verify:read`、`mailbox:write`、`vault:read`、`vault:write` 或 `admin`。密钥、审计、备份、数据源、凭据和 Webhook 管理及微软 OAuth 要求有效管理员会话，`admin` 子密钥也不能代替会话。请求头支持 `X-API-Key` 或 `Authorization: Bearer`，不接受 URL 密钥；显式密钥鉴权优先于 Cookie。
+开发者中心包含 138 个 HTTP 操作的搜索目录、接口详情抽屉、cURL / JavaScript / Python 示例、工作流与邮箱接入诊断，契约版本 2.5.0 新增手动授权兑换及安全修复诊断。设置中可创建有有效期、权限范围以及邮箱/平台限制的自动化密钥，按最小权限选择 `verify:read`、`mailbox:write`、`vault:read`、`vault:write` 或 `admin`。密钥、审计、备份、数据源、凭据和 Webhook 管理及微软 OAuth 要求有效管理员会话，`admin` 子密钥也不能代替会话。请求头支持 `X-API-Key` 或 `Authorization: Bearer`，不接受 URL 密钥；显式密钥鉴权优先于 Cookie。
 
 完整接入步骤见 [开发者指南](docs/API.md)。部署后提供 `/openapi.json`（OpenAPI 3.1）、`/postman.json`、`/llms.txt`、`/llms-full.txt`、`/api-doc.md`；保留 `/api-doc.json` 目录兼容。接口定义位于 `shared/api-contract.ts`，运行 `pnpm docs:generate` 更新仓库文档，`pnpm docs:check` 防止文档过期。
 

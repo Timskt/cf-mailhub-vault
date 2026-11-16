@@ -97,6 +97,7 @@ const VaultPage = lazy(() => import("@/pages/vault"));
 const VaultEditor = lazy(() =>
   import("@/pages/vault").then((m) => ({ default: m.VaultEditor })),
 );
+const ProvidersPage = lazy(() => import("@/pages/providers"));
 const OutlookPage = lazy(() => import("@/pages/outlook"));
 const InboxPage = lazy(() => import("@/pages/mail"));
 const MailRulesPage = lazy(() => import("@/features/mail-rules"));
@@ -124,6 +125,7 @@ const CodeReader = lazy(() =>
 const navigation = [
   { id: "vault", label: "平台账号", icon: Layers2 },
   { id: "outlook", label: "Outlook", icon: Mail },
+  { id: "providers", label: "外部邮箱", icon: Globe2 },
   { id: "mailboxes", label: "临时邮箱", icon: Timer },
   { id: "inbox", label: "域名收件箱", icon: Inbox },
   { id: "rules", label: "收件规则", icon: SlidersHorizontal },
@@ -376,6 +378,9 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
               {route.page === "outlook" && (
                 <OutlookPage key={route.query} initialQuery={route.query} />
               )}
+              {route.page === "providers" && (
+                <ProvidersPage key={route.query} initialQuery={route.query} />
+              )}
               {route.page === "mailboxes" && <MailboxesPage />}
               {route.page === "inbox" && (
                 <InboxPage key={route.query} initialQuery={route.query} />
@@ -439,7 +444,7 @@ function Navigation({
         <SidebarGroup>
           <SidebarGroupLabel>工作区</SidebarGroupLabel>
           <SidebarMenu>
-            {navigation.slice(0, 6).map(({ id, label, icon: Icon }) => (
+            {navigation.slice(0, 7).map(({ id, label, icon: Icon }) => (
               <SidebarMenuItem key={id}>
                 <SidebarMenuButton asChild isActive={id === page}>
                   <a
@@ -459,7 +464,7 @@ function Navigation({
         <SidebarGroup className="mt-auto">
           <SidebarGroupLabel>管理</SidebarGroupLabel>
           <SidebarMenu>
-            {navigation.slice(6).map(({ id, label, icon: Icon }) => (
+            {navigation.slice(7).map(({ id, label, icon: Icon }) => (
               <SidebarMenuItem key={id}>
                 <SidebarMenuButton asChild isActive={id === page}>
                   <a

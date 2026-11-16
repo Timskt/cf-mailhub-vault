@@ -3,8 +3,8 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "MailHub & Vault API",
-    "version": "2.4.0",
-    "description": "自建多域名邮箱、Outlook 托管/发信、平台账号、事件通知及便携业务备份。现有 /api 路径保持兼容，2.4.0 为契约版本。支持细分 scope 和资源限制密钥；主密钥具有业务管理员权限，会话专属接口仍须 Cookie。权限见 x-authorization，副作用见 x-side-effects，成功状态包括 200/201/202。",
+    "version": "2.5.0",
+    "description": "自建多域名邮箱、Outlook 托管/发信、平台账号、事件通知及便携业务备份。现有 /api 路径保持兼容，2.5.0 为契约版本。支持细分 scope 和资源限制密钥；主密钥具有业务管理员权限，会话专属接口仍须 Cookie。权限见 x-authorization，副作用见 x-side-effects，成功状态包括 200/201/202。",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -88,6 +88,10 @@
     {
       "name": "兼容接口",
       "description": "兼容接口接口与工作流"
+    },
+    {
+      "name": "外部邮箱",
+      "description": "外部邮箱接口与工作流"
     }
   ],
   "paths": {
@@ -988,6 +992,20 @@
           }
         ],
         "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cf_domain",
+                "outlook",
+                "mailtm",
+                "mailgw"
+              ]
+            },
+            "description": "仅用于明确 email 目标，消除同地址多个来源的歧义"
+          },
           {
             "name": "email",
             "in": "query",
@@ -2255,7 +2273,9 @@
                 "cf_domain",
                 "outlook",
                 "gptmail",
-                "external"
+                "external",
+                "mailtm",
+                "mailgw"
               ]
             },
             "description": "邮箱来源"
@@ -2499,7 +2519,9 @@
                       "cf_domain",
                       "outlook",
                       "gptmail",
-                      "external"
+                      "external",
+                      "mailtm",
+                      "mailgw"
                     ]
                   },
                   "username": {
@@ -2967,7 +2989,9 @@
                 "cf_domain",
                 "outlook",
                 "gptmail",
-                "external"
+                "external",
+                "mailtm",
+                "mailgw"
               ]
             },
             "description": "邮箱来源"
@@ -3513,7 +3537,9 @@
                       "cf_domain",
                       "outlook",
                       "gptmail",
-                      "external"
+                      "external",
+                      "mailtm",
+                      "mailgw"
                     ]
                   },
                   "username": {
@@ -4185,7 +4211,9 @@
                 "cf_domain",
                 "outlook",
                 "gptmail",
-                "external"
+                "external",
+                "mailtm",
+                "mailgw"
               ]
             },
             "description": "邮箱来源"
@@ -17988,7 +18016,7 @@
       "get": {
         "operationId": "getBackupManifest",
         "summary": "查询便携业务备份范围与限制",
-        "description": "schema 11 共 12 张业务表，包括独立 platforms（空平台也保留）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 文件。",
+        "description": "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18336,7 +18364,7 @@
       "post": {
         "operationId": "dryRunBackup",
         "summary": "校验备份并预览恢复",
-        "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18424,6 +18452,9 @@
                           },
                           {
                             "$ref": "#/components/schemas/LegacyBackupDocument"
+                          },
+                          {
+                            "$ref": "#/components/schemas/Schema11BackupDocument"
                           }
                         ]
                       },
@@ -18545,7 +18576,7 @@
       "post": {
         "operationId": "previewBackupRestore",
         "summary": "校验备份并预览恢复",
-        "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18633,6 +18664,9 @@
                           },
                           {
                             "$ref": "#/components/schemas/LegacyBackupDocument"
+                          },
+                          {
+                            "$ref": "#/components/schemas/Schema11BackupDocument"
                           }
                         ]
                       },
@@ -20875,6 +20909,2145 @@
           }
         }
       }
+    },
+    "/api/providers": {
+      "get": {
+        "operationId": "listMailProviders",
+        "summary": "读取已接入的临时邮箱服务商与账号数",
+        "description": "读取已接入的临时邮箱服务商与账号数",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "enum": [
+                              "mailtm",
+                              "mailgw"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "docs": {
+                            "type": "string"
+                          },
+                          "account_count": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "attention_count": {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          "capabilities": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "account_count",
+                          "attention_count"
+                        ],
+                        "additionalProperties": true
+                      }
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/domains": {
+      "get": {
+        "operationId": "listProviderDomains",
+        "summary": "读取服务商可用域名",
+        "description": "provider 仅支持 mailtm/mailgw。固定访问官方端点，返回该页活动且公开的域名。每页最多 30 条，total 为服务商原始域名总数（可能含被过滤项）。不自动创建账号。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "description": "provider，作为路径段时 URL 编码",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            },
+            "description": "服务商页码"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "domain": {
+                            "type": "string",
+                            "maxLength": 253
+                          }
+                        },
+                        "required": [
+                          "domain"
+                        ],
+                        "additionalProperties": true
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "page",
+                    "limit",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts": {
+      "get": {
+        "operationId": "listProviderAccounts",
+        "summary": "分页读取外部邮箱账号",
+        "description": "不返回密码或登录令牌。可按 provider、q、status 筛选；attention 包含启用且 error/reauth_required 的账号。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "页码，从 1 开始"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            },
+            "description": "每页条数"
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mailtm",
+                "mailgw"
+              ]
+            },
+            "description": "provider"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "q"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "active",
+                "disabled",
+                "attention"
+              ]
+            },
+            "description": "status"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 9007199254740991
+                          },
+                          "provider": {
+                            "type": "string",
+                            "enum": [
+                              "mailtm",
+                              "mailgw"
+                            ]
+                          },
+                          "address": {
+                            "type": "string",
+                            "maxLength": 254,
+                            "format": "email"
+                          },
+                          "remote_id": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "active",
+                              "disabled"
+                            ]
+                          },
+                          "auth_status": {
+                            "type": "string",
+                            "enum": [
+                              "unchecked",
+                              "healthy",
+                              "error",
+                              "reauth_required"
+                            ]
+                          },
+                          "remark": {
+                            "type": "string",
+                            "maxLength": 1000
+                          },
+                          "last_checked_at": {
+                            "type": "string",
+                            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                          },
+                          "last_error": {
+                            "type": "string"
+                          },
+                          "last_error_code": {
+                            "type": "string"
+                          },
+                          "has_password": {
+                            "type": "boolean"
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                          },
+                          "updated_at": {
+                            "type": "string",
+                            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "provider",
+                          "address",
+                          "status",
+                          "auth_status",
+                          "has_password"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "page",
+                    "limit",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      },
+      "post": {
+        "operationId": "connectProviderAccount",
+        "summary": "接入已有邮箱或创建外部邮箱",
+        "description": "mode=connect（默认）使用邮箱和密码登录并校验 /me 身份；mode=create 先保存本地凭据，再调用官方创建接口。创建失败时本地账号保留且响应 data.id 可用于修复；网络超时后先测试连接，切勿换键自动重建。登录成功不等于收件验证成功，新账号为 unchecked。推荐使用 Idempotency-Key。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "mailbox:write"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": true,
+          "required": false,
+          "scope": [
+            "authenticated_actor",
+            "method",
+            "path"
+          ],
+          "request_identity": [
+            "raw_body",
+            "raw_query",
+            "content_type"
+          ],
+          "completed_retention_seconds": 604800,
+          "max_response_bytes": 262144,
+          "max_records_per_actor": 1000,
+          "unknown_outcome": "never_automatically_reexecute",
+          "expired_complete": "may_be_removed_no_deduplication_guarantee"
+        },
+        "x-side-effects": "创建本地账号，create 模式还会在服务商创建邮箱。密码与令牌纳入凭据加密和便携业务备份。",
+        "x-credential-response": false,
+        "x-request-body-max-bytes": 2097152,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "mailtm",
+                      "mailgw"
+                    ]
+                  },
+                  "address": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "minLength": 1
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "connect",
+                      "create"
+                    ]
+                  },
+                  "remark": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                },
+                "required": [
+                  "provider",
+                  "address",
+                  "password"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "provider": "mailtm",
+                "address": "user@example.com",
+                "password": "EXAMPLE-REPLACE-PASSWORD",
+                "mode": "connect"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "已创建；凭据仅在本次创建结果及有效幂等回放中提供。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "只有成功回放时为 true；仍执行当前权限校验。",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Idempotency-Key-Expires-At": {
+                "description": "首次预留起 7 天的成功结果回放截止时间；不表示未知结果可到期重执。",
+                "schema": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "mailtm",
+                            "mailgw"
+                          ]
+                        },
+                        "address": {
+                          "type": "string",
+                          "maxLength": 254,
+                          "format": "email"
+                        },
+                        "remote_id": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "active",
+                            "disabled"
+                          ]
+                        },
+                        "auth_status": {
+                          "type": "string",
+                          "enum": [
+                            "unchecked",
+                            "healthy",
+                            "error",
+                            "reauth_required"
+                          ]
+                        },
+                        "remark": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "last_checked_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "last_error": {
+                          "type": "string"
+                        },
+                        "last_error_code": {
+                          "type": "string"
+                        },
+                        "has_password": {
+                          "type": "boolean"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "provider",
+                        "address",
+                        "status",
+                        "auth_status",
+                        "has_password"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts/{id}": {
+      "get": {
+        "operationId": "getProviderAccount",
+        "summary": "读取外部邮箱详情与密码",
+        "description": "管理员读取，返回可回显的密码和并发修改版本，不返回服务商令牌。响应禁止缓存，受限密钥仍须满足邮箱/平台资源限制。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": true,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "mailtm",
+                            "mailgw"
+                          ]
+                        },
+                        "address": {
+                          "type": "string",
+                          "maxLength": 254,
+                          "format": "email"
+                        },
+                        "remote_id": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "active",
+                            "disabled"
+                          ]
+                        },
+                        "auth_status": {
+                          "type": "string",
+                          "enum": [
+                            "unchecked",
+                            "healthy",
+                            "error",
+                            "reauth_required"
+                          ]
+                        },
+                        "remark": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "last_checked_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "last_error": {
+                          "type": "string"
+                        },
+                        "last_error_code": {
+                          "type": "string"
+                        },
+                        "has_password": {
+                          "type": "boolean"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "password": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "credential_version": {
+                          "type": "string",
+                          "maxLength": 100
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "address",
+                        "password",
+                        "credential_version"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateProviderAccount",
+        "summary": "更新外部邮箱登录凭据和用途",
+        "description": "地址和服务商不可变。password 为本地登录凭据，不会调用服务商改密；变化后清空令牌并置为 unchecked。建议提交详情中的 credential_version，冲突返回 409。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "mailbox:write"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": true,
+          "required": false,
+          "scope": [
+            "authenticated_actor",
+            "method",
+            "path"
+          ],
+          "request_identity": [
+            "raw_body",
+            "raw_query",
+            "content_type"
+          ],
+          "completed_retention_seconds": 604800,
+          "max_response_bytes": 262144,
+          "max_records_per_actor": 1000,
+          "unknown_outcome": "never_automatically_reexecute",
+          "expired_complete": "may_be_removed_no_deduplication_guarantee"
+        },
+        "x-side-effects": "修改业务数据",
+        "x-credential-response": false,
+        "x-request-body-max-bytes": 2097152,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "minLength": 1
+                  },
+                  "remark": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "disabled"
+                    ]
+                  },
+                  "credential_version": {
+                    "type": "string",
+                    "maxLength": 100
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "只有成功回放时为 true；仍执行当前权限校验。",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Idempotency-Key-Expires-At": {
+                "description": "首次预留起 7 天的成功结果回放截止时间；不表示未知结果可到期重执。",
+                "schema": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 9007199254740991
+                        },
+                        "provider": {
+                          "type": "string",
+                          "enum": [
+                            "mailtm",
+                            "mailgw"
+                          ]
+                        },
+                        "address": {
+                          "type": "string",
+                          "maxLength": 254,
+                          "format": "email"
+                        },
+                        "remote_id": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "active",
+                            "disabled"
+                          ]
+                        },
+                        "auth_status": {
+                          "type": "string",
+                          "enum": [
+                            "unchecked",
+                            "healthy",
+                            "error",
+                            "reauth_required"
+                          ]
+                        },
+                        "remark": {
+                          "type": "string",
+                          "maxLength": 1000
+                        },
+                        "last_checked_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "last_error": {
+                          "type": "string"
+                        },
+                        "last_error_code": {
+                          "type": "string"
+                        },
+                        "has_password": {
+                          "type": "boolean"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "updated_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "provider",
+                        "address",
+                        "status",
+                        "auth_status",
+                        "has_password"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeProviderAccount",
+        "summary": "移除外部邮箱接入",
+        "description": "仅移除本地接入；仍关联平台账号时拒绝。不会删除服务商上的邮箱或邮件。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "mailbox:write"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": true,
+          "required": false,
+          "scope": [
+            "authenticated_actor",
+            "method",
+            "path"
+          ],
+          "request_identity": [
+            "raw_body",
+            "raw_query",
+            "content_type"
+          ],
+          "completed_retention_seconds": 604800,
+          "max_response_bytes": 262144,
+          "max_records_per_actor": 1000,
+          "unknown_outcome": "never_automatically_reexecute",
+          "expired_complete": "may_be_removed_no_deduplication_guarantee"
+        },
+        "x-side-effects": "修改业务数据",
+        "x-credential-response": false,
+        "x-request-body-max-bytes": 2097152,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "只有成功回放时为 true；仍执行当前权限校验。",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Idempotency-Key-Expires-At": {
+                "description": "首次预留起 7 天的成功结果回放截止时间；不表示未知结果可到期重执。",
+                "schema": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts/{id}/check": {
+      "post": {
+        "operationId": "checkProviderAccount",
+        "summary": "验证外部邮箱身份与收件连接",
+        "description": "校验 /me 与已保存身份，读取第一页收件。过期令牌会使用已存密码重登一次。结果写入连接状态。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "mailbox:write"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": true,
+          "required": false,
+          "scope": [
+            "authenticated_actor",
+            "method",
+            "path"
+          ],
+          "request_identity": [
+            "raw_body",
+            "raw_query",
+            "content_type"
+          ],
+          "completed_retention_seconds": 604800,
+          "max_response_bytes": 262144,
+          "max_records_per_actor": 1000,
+          "unknown_outcome": "never_automatically_reexecute",
+          "expired_complete": "may_be_removed_no_deduplication_guarantee"
+        },
+        "x-side-effects": "修改业务数据",
+        "x-credential-response": false,
+        "x-request-body-max-bytes": 2097152,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "只有成功回放时为 true；仍执行当前权限校验。",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Idempotency-Key-Expires-At": {
+                "description": "首次预留起 7 天的成功结果回放截止时间；不表示未知结果可到期重执。",
+                "schema": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connected": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "connected"
+                      ],
+                      "additionalProperties": true
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts/{id}/messages": {
+      "get": {
+        "operationId": "listProviderMessages",
+        "summary": "读取外部邮箱收件列表",
+        "description": "读取外部邮箱收件列表",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "description": "页码，每页最多 30 封"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "读取服务商邮件；自动重登及连接健康状态会保存。不会标记已读。",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "maxLength": 200
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "sender": {
+                            "type": "string"
+                          },
+                          "sender_name": {
+                            "type": "string"
+                          },
+                          "created_at": {
+                            "type": "string",
+                            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                          },
+                          "is_read": {
+                            "type": "integer",
+                            "enum": [
+                              0,
+                              1
+                            ]
+                          },
+                          "text_content": {
+                            "type": "string"
+                          },
+                          "html_content": {
+                            "type": "string"
+                          },
+                          "verification_code": {
+                            "type": "string"
+                          },
+                          "verification_link": {
+                            "type": "string"
+                          },
+                          "has_attachments": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "subject",
+                          "sender",
+                          "created_at",
+                          "text_content",
+                          "html_content",
+                          "verification_code",
+                          "verification_link"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {},
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "page",
+                    "limit",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts/{id}/messages/{messageId}": {
+      "get": {
+        "operationId": "getProviderMessage",
+        "summary": "读取外部邮件完整正文",
+        "description": "读取正文并提取验证码/链接；HTML 为不可信邮件内容，调用方应隔离渲染。附件仅返回 has_attachments，可在服务商网站查看。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "description": "messageId，作为路径段时 URL 编码",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "读取服务商邮件，保存登录与连接状态；不会标记已读。",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "subject": {
+                          "type": "string"
+                        },
+                        "sender": {
+                          "type": "string"
+                        },
+                        "sender_name": {
+                          "type": "string"
+                        },
+                        "created_at": {
+                          "type": "string",
+                          "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+                        },
+                        "is_read": {
+                          "type": "integer",
+                          "enum": [
+                            0,
+                            1
+                          ]
+                        },
+                        "text_content": {
+                          "type": "string"
+                        },
+                        "html_content": {
+                          "type": "string"
+                        },
+                        "verification_code": {
+                          "type": "string"
+                        },
+                        "verification_link": {
+                          "type": "string"
+                        },
+                        "has_attachments": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "subject",
+                        "sender",
+                        "created_at",
+                        "text_content",
+                        "html_content",
+                        "verification_code",
+                        "verification_link"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/providers/accounts/{id}/code": {
+      "get": {
+        "operationId": "lookupProviderVerification",
+        "summary": "提取外部邮箱验证码或验证链接",
+        "description": "第一页最多 30 封，按 since/sender 筛选后读取最新 10 封详情，再按 q 匹配正文；limited 表示窗口不足。包含列表摘要之外的链接/验证码。调用方应固定 since，间隔至少 5 秒轮询，429/错误停止并退避。",
+        "tags": [
+          "外部邮箱"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 40,
+              "format": "date-time",
+              "description": "含时区的 ISO 8601。记录操作开始时刻并在所有轮询中保持不变。"
+            },
+            "description": "操作开始时刻（含时区）"
+          },
+          {
+            "name": "sender",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "description": "发件人包含文本"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "邮件关键词"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "verify:read"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "读取服务商邮件，必要时重新登录并更新连接状态。",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/Code"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
     }
   },
   "webhooks": {
@@ -21067,7 +23240,9 @@
             "type": "string",
             "enum": [
               "cf_domain",
-              "outlook"
+              "outlook",
+              "mailtm",
+              "mailgw"
             ]
           }
         },
@@ -21091,7 +23266,9 @@
                 "type": "string",
                 "enum": [
                   "cf_domain",
-                  "outlook"
+                  "outlook",
+                  "mailtm",
+                  "mailgw"
                 ]
               }
             },
@@ -21168,7 +23345,9 @@
             "type": "string",
             "enum": [
               "cf_domain",
-              "outlook"
+              "outlook",
+              "mailtm",
+              "mailgw"
             ]
           },
           "since": {
@@ -21206,7 +23385,9 @@
                 "type": "string",
                 "enum": [
                   "cf_domain",
-                  "outlook"
+                  "outlook",
+                  "mailtm",
+                  "mailgw"
                 ]
               }
             },
@@ -21329,7 +23510,9 @@
                   "cf_domain",
                   "outlook",
                   "gptmail",
-                  "external"
+                  "external",
+                  "mailtm",
+                  "mailgw"
                 ]
               },
               "vault_id": {
@@ -21398,6 +23581,7 @@
               "manage_outlook",
               "check_outlook",
               "manage_domains",
+              "manage_provider",
               null
             ]
           },
@@ -21435,7 +23619,9 @@
               "cf_domain",
               "outlook",
               "gptmail",
-              "external"
+              "external",
+              "mailtm",
+              "mailgw"
             ]
           },
           "vault_id": {
@@ -21631,7 +23817,9 @@
               "cf_domain",
               "outlook",
               "gptmail",
-              "external"
+              "external",
+              "mailtm",
+              "mailgw"
             ]
           },
           "username": {
@@ -21860,7 +24048,9 @@
               "cf_domain",
               "outlook",
               "gptmail",
-              "external"
+              "external",
+              "mailtm",
+              "mailgw"
             ]
           },
           "username": {
@@ -21955,7 +24145,9 @@
               "cf_domain",
               "outlook",
               "gptmail",
-              "external"
+              "external",
+              "mailtm",
+              "mailgw"
             ]
           },
           "username": {
@@ -22102,7 +24294,9 @@
                 "cf_domain",
                 "outlook",
                 "gptmail",
-                "external"
+                "external",
+                "mailtm",
+                "mailgw"
               ]
             }
           },
@@ -23933,6 +26127,7 @@
                 "table": {
                   "type": "string",
                   "enum": [
+                    "provider_accounts",
                     "accounts",
                     "platform_vault",
                     "oauth_sessions",
@@ -23950,7 +26145,7 @@
               ],
               "additionalProperties": true
             },
-            "maxItems": 4
+            "maxItems": 5
           }
         },
         "required": [
@@ -23966,6 +26161,7 @@
           "table": {
             "type": "string",
             "enum": [
+              "provider_accounts",
               "accounts",
               "platform_vault",
               "oauth_sessions",
@@ -24291,6 +26487,464 @@
           },
           "schema_version": {
             "type": "integer",
+            "const": 12
+          },
+          "schema_hash": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "created_at": {
+            "type": "string",
+            "maxLength": 40,
+            "format": "date-time"
+          },
+          "redacted": {
+            "type": "boolean"
+          },
+          "restorable": {
+            "type": "boolean"
+          },
+          "consistency": {
+            "type": "string",
+            "const": "revision_checked"
+          },
+          "table_counts": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "groups": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "tags": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "accounts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "account_tags": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "cf_inbox_mails": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "mail_rules": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "platforms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "platform_vault": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "temp_emails": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "temp_mailboxes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "domains": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "provider_accounts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          },
+          "table_hashes": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "groups": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "tags": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "accounts": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "account_tags": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "cf_inbox_mails": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "mail_rules": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "platforms": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "platform_vault": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "temp_emails": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "temp_mailboxes": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "domains": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "provider_accounts": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          },
+          "data_hash": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "external_dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "format",
+          "version",
+          "schema_version",
+          "schema_hash",
+          "created_at",
+          "redacted",
+          "restorable",
+          "consistency",
+          "table_counts",
+          "table_hashes",
+          "data_hash",
+          "excluded",
+          "external_dependencies"
+        ],
+        "additionalProperties": false
+      },
+      "BackupDocument": {
+        "type": "object",
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/BackupManifest"
+          },
+          "tables": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "accounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "account_tags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "cf_inbox_mails": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "mail_rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "platforms": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "platform_vault": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "temp_emails": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "temp_mailboxes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "provider_accounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "manifest",
+          "tables"
+        ],
+        "additionalProperties": false
+      },
+      "Schema11BackupManifest": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "mailhub-backup"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "schema_version": {
+            "type": "integer",
             "const": 11
           },
           "schema_hash": {
@@ -24508,11 +27162,11 @@
         ],
         "additionalProperties": false
       },
-      "BackupDocument": {
+      "Schema11BackupDocument": {
         "type": "object",
         "properties": {
           "manifest": {
-            "$ref": "#/components/schemas/BackupManifest"
+            "$ref": "#/components/schemas/Schema11BackupManifest"
           },
           "tables": {
             "type": "object",
@@ -25112,7 +27766,7 @@
           "tables"
         ],
         "additionalProperties": false,
-        "description": "仅兼容已发布的 schema 10：先严格校验原始 schema hash、字段及内容，再在内存中补出 platforms 并转为 schema 11。明文仅限脱敏预览。"
+        "description": "兼容已发布的 schema 10 和 11：先严格校验原始 schema hash、字段及内容，schema 10 在内存中补出 platforms，旧版本均补出空 provider_accounts 并转为 schema 12。明文仅限脱敏预览。"
       },
       "EncryptedBackup": {
         "type": "object",
@@ -25188,7 +27842,7 @@
           },
           "schema_version": {
             "type": "integer",
-            "const": 11
+            "const": 12
           },
           "name": {
             "type": "string",
@@ -25228,7 +27882,8 @@
                 "platform_vault",
                 "temp_emails",
                 "temp_mailboxes",
-                "domains"
+                "domains",
+                "provider_accounts"
               ]
             }
           },
@@ -25498,6 +28153,28 @@
                   "fields"
                 ],
                 "additionalProperties": true
+              },
+              "provider_accounts": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "key",
+                  "fields"
+                ],
+                "additionalProperties": true
               }
             },
             "additionalProperties": true
@@ -25644,6 +28321,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 1000
+              },
+              "provider_accounts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
               }
             },
             "required": [
@@ -25658,7 +28340,8 @@
               "platform_vault",
               "temp_emails",
               "temp_mailboxes",
-              "domains"
+              "domains",
+              "provider_accounts"
             ],
             "additionalProperties": false
           },

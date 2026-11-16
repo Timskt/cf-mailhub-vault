@@ -1,6 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+// Finish intercepted settings refreshes before Playwright disposes API responses.
+test.afterEach(async ({ page, context }) => {
+  await page.unrouteAll({ behavior: "wait" });
+  await context.unrouteAll({ behavior: "wait" });
+});
+
 async function login(page: Page) {
   expect(
     (

@@ -127,8 +127,8 @@ def _target(value: Any) -> None:
         or len(value["platform"]) > 100
     ):
         _invalid("platform is invalid")
-    if "source" in value and ("email" not in value or value["source"] not in ("outlook", "cf_domain")):
-        _invalid("source requires an email target and must be outlook or cf_domain")
+    if "source" in value and ("email" not in value or value["source"] not in ("outlook", "cf_domain", "mailtm", "mailgw")):
+        _invalid("source requires an email target and must be outlook, cf_domain, mailtm or mailgw")
 
 
 def _verification_input(value: Any) -> None:

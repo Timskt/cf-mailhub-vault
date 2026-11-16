@@ -272,6 +272,12 @@
               ],
               "query": [
                 {
+                  "key": "source",
+                  "value": "",
+                  "description": "仅用于明确 email 目标，消除同地址多个来源的歧义",
+                  "disabled": true
+                },
+                {
                   "key": "email",
                   "value": "user@example.com",
                   "description": "邮箱地址",
@@ -4498,7 +4504,7 @@
           "name": "getBackupManifest · 查询便携业务备份范围与限制",
           "request": {
             "method": "GET",
-            "description": "schema 11 共 12 张业务表，包括独立 platforms（空平台也保留）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "description": "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
             "auth": {
               "type": "noauth"
             },
@@ -4590,7 +4596,7 @@
           "name": "dryRunBackup · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -4634,7 +4640,7 @@
           "name": "previewBackupRestore · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -5179,6 +5185,425 @@
                 ":id"
               ],
               "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "外部邮箱",
+      "item": [
+        {
+          "name": "listMailProviders · 读取已接入的临时邮箱服务商与账号数",
+          "request": {
+            "method": "GET",
+            "description": "读取已接入的临时邮箱服务商与账号数\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "listProviderDomains · 读取服务商可用域名",
+          "request": {
+            "method": "GET",
+            "description": "provider 仅支持 mailtm/mailgw。固定访问官方端点，返回该页活动且公开的域名。每页最多 30 条，total 为服务商原始域名总数（可能含被过滤项）。不自动创建账号。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/:provider/domains",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                ":provider",
+                "domains"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": "服务商页码",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "provider",
+                  "value": "REPLACE_PROVIDER",
+                  "description": "provider，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listProviderAccounts · 分页读取外部邮箱账号",
+          "request": {
+            "method": "GET",
+            "description": "不返回密码或登录令牌。可按 provider、q、status 筛选；attention 包含启用且 error/reauth_required 的账号。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "provider",
+                  "value": "",
+                  "description": "provider",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "q",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "status",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "connectProviderAccount · 接入已有邮箱或创建外部邮箱",
+          "request": {
+            "method": "POST",
+            "description": "mode=connect（默认）使用邮箱和密码登录并校验 /me 身份；mode=create 先保存本地凭据，再调用官方创建接口。创建失败时本地账号保留且响应 data.id 可用于修复；网络超时后先测试连接，切勿换键自动重建。登录成功不等于收件验证成功，新账号为 unchecked。推荐使用 Idempotency-Key。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：201\n副作用：创建本地账号，create 模式还会在服务商创建邮箱。密码与令牌纳入凭据加密和便携业务备份。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider\": \"mailtm\",\n  \"address\": \"user@example.com\",\n  \"password\": \"EXAMPLE-REPLACE-PASSWORD\",\n  \"mode\": \"connect\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "getProviderAccount · 读取外部邮箱详情与密码",
+          "request": {
+            "method": "GET",
+            "description": "管理员读取，返回可回显的密码和并发修改版本，不返回服务商令牌。响应禁止缓存，受限密钥仍须满足邮箱/平台资源限制。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "updateProviderAccount · 更新外部邮箱登录凭据和用途",
+          "request": {
+            "method": "PUT",
+            "description": "地址和服务商不可变。password 为本地登录凭据，不会调用服务商改密；变化后清空令牌并置为 unchecked。建议提交详情中的 credential_version，冲突返回 409。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "removeProviderAccount · 移除外部邮箱接入",
+          "request": {
+            "method": "DELETE",
+            "description": "仅移除本地接入；仍关联平台账号时拒绝。不会删除服务商上的邮箱或邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "checkProviderAccount · 验证外部邮箱身份与收件连接",
+          "request": {
+            "method": "POST",
+            "description": "校验 /me 与已保存身份，读取第一页收件。过期令牌会使用已存密码重登一次。结果写入连接状态。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id/check",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id",
+                "check"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listProviderMessages · 读取外部邮箱收件列表",
+          "request": {
+            "method": "GET",
+            "description": "读取外部邮箱收件列表\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：读取服务商邮件；自动重登及连接健康状态会保存。不会标记已读。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id/messages",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id",
+                "messages"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "",
+                  "description": "页码，每页最多 30 封",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "getProviderMessage · 读取外部邮件完整正文",
+          "request": {
+            "method": "GET",
+            "description": "读取正文并提取验证码/链接；HTML 为不可信邮件内容，调用方应隔离渲染。附件仅返回 has_attachments，可在服务商网站查看。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：读取服务商邮件，保存登录与连接状态；不会标记已读。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id/messages/:messageId",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id",
+                "messages",
+                ":messageId"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                },
+                {
+                  "key": "messageId",
+                  "value": "REPLACE_MESSAGEID",
+                  "description": "messageId，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "lookupProviderVerification · 提取外部邮箱验证码或验证链接",
+          "request": {
+            "method": "GET",
+            "description": "第一页最多 30 封，按 since/sender 筛选后读取最新 10 封详情，再按 q 匹配正文；limited 表示窗口不足。包含列表摘要之外的链接/验证码。调用方应固定 since，间隔至少 5 秒轮询，429/错误停止并退避。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：读取服务商邮件，必要时重新登录并更新连接状态。",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/providers/accounts/:id/code",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "providers",
+                "accounts",
+                ":id",
+                "code"
+              ],
+              "query": [
+                {
+                  "key": "since",
+                  "value": "",
+                  "description": "操作开始时刻（含时区）",
+                  "disabled": true
+                },
+                {
+                  "key": "sender",
+                  "value": "",
+                  "description": "发件人包含文本",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮件关键词",
+                  "disabled": true
+                }
+              ],
               "variable": [
                 {
                   "key": "id",

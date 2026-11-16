@@ -5,6 +5,8 @@ export const vaultSources = [
   "cf_domain",
   "outlook",
   "gptmail",
+  "mailtm",
+  "mailgw",
   "external",
 ] as const;
 export const vaultStatuses = [

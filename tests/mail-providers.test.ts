@@ -1,0 +1,638 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { database, json } from "./helpers";
+import { db, eq, insert, update } from "../src/storage/client";
+import { createApiKey } from "../src/api-keys";
+import {
+  openBackup,
+  validateBackup,
+  type Schema11BackupDocument,
+} from "../src/routes/backups";
+import { digest } from "../src/storage/model";
+import { operations, schemas } from "../shared/api-contract";
+import Ajv from "ajv";
+import addFormats from "ajv-formats";
+
+const address = "managed@provider.test",
+  password = "Fictional-only-password-82",
+  token = "fictional-provider-token";
+const remote = {
+  id: "remote123",
+  address,
+  isDisabled: false,
+  isDeleted: false,
+};
+const mail = {
+  id: "message123",
+  accountId: remote.id,
+  from: { address: "auth@example.test", name: "Example" },
+  subject: "Sign in",
+  intro: "Open the message to continue",
+  createdAt: new Date().toISOString(),
+  seen: false,
+  isDeleted: false,
+};
+const collection = (members: unknown[], total = members.length) =>
+  json({ "hydra:member": members, "hydra:totalItems": total });
+type Handler = (
+  url: URL,
+  init: RequestInit,
+) => Response | Promise<Response | undefined> | undefined;
+async function provider<T>(run: () => Promise<T>, override?: Handler) {
+  const original = globalThis.fetch;
+  const calls: { path: string; method: string; host: string }[] = [];
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+  ) => {
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url,
+    );
+    if (!["api.mail.tm", "api.mail.gw"].includes(url.hostname))
+      throw new Error("Unexpected request: " + url.origin);
+    assert.equal(init.redirect, "manual");
+    calls.push({
+      path: url.pathname,
+      method: init.method || "GET",
+      host: url.hostname,
+    });
+    const response = await override?.(url, init);
+    if (response) return response;
+    if (url.pathname === "/domains")
+      return collection([
+        { domain: "example.test", isActive: true, isPrivate: false },
+        { domain: "private.test", isActive: true, isPrivate: true },
+      ]);
+    if (url.pathname === "/accounts") return json(remote, 201);
+    if (url.pathname === "/token") {
+      const body = JSON.parse(String(init.body));
+      assert.equal(body.address, address);
+      assert.equal(body.password, password);
+      return json({ id: remote.id, token });
+    }
+    assert.equal(
+      new Headers(init.headers).get("Authorization"),
+      `Bearer ${token}`,
+    );
+    if (url.pathname === "/me") return json(remote);
+    if (url.pathname === "/messages") return collection([mail]);
+    if (url.pathname === `/messages/${mail.id}`)
+      return json({
+        ...mail,
+        text: "Your verification code is 238641",
+        html: [
+          '<a href="https://example.test/verify?token=fictional">Verify email</a>',
+        ],
+      });
+    throw new Error("Unexpected route: " + url.pathname);
+  }) as typeof fetch;
+  try {
+    const result = await run();
+    return { result, calls };
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+async function connect(
+  f: Awaited<ReturnType<typeof database>>,
+  source = "mailtm",
+  mode = "connect",
+) {
+  const result = await f.request("/api/providers/accounts", {
+    provider: source,
+    address,
+    password,
+    mode,
+    remark: "Owned inbox",
+  });
+  assert.equal(result.response.status, 201, JSON.stringify(result.data));
+  return result.data.data;
+}
+function conforms(id: string, data: unknown) {
+  const ajv = new Ajv({ strict: false, allErrors: true });
+  addFormats(ajv);
+  const operation = operations.find((o) => o.operationId === id)!;
+  const validate = ajv.compile({
+    ...operation.response,
+    components: { schemas },
+  });
+  assert.equal(validate(data), true, JSON.stringify(validate.errors));
+}
+
+test("Mail.tm and Mail.gw connect, paginate, read bodies and extract links hidden beyond message intro", async () => {
+  const f = await database();
+  try {
+    const { calls } = await provider(async () => {
+      for (const source of ["mailtm", "mailgw"]) {
+        const domains = await f.request(`/api/providers/${source}/domains`);
+        assert.deepEqual(domains.data.data, [{ domain: "example.test" }]);
+        conforms("listProviderDomains", domains.data);
+        const a = await connect(f, source);
+        assert.equal(a.auth_status, "unchecked");
+        assert.equal(JSON.stringify(a).includes(password), false);
+        assert.equal(JSON.stringify(a).includes(token), false);
+        const list = await f.request(
+          `/api/providers/accounts/${a.id}/messages?page=2`,
+        );
+        conforms("listProviderMessages", list.data);
+        assert.equal(list.data.page, 2);
+        const detail = await f.request(
+          `/api/providers/accounts/${a.id}/messages/${mail.id}`,
+        );
+        conforms("getProviderMessage", detail.data);
+        assert.equal(detail.data.data.verification_code, "238641");
+        const code = await f.request(
+          `/api/providers/accounts/${a.id}/code?sender=auth&q=verification`,
+        );
+        conforms("lookupProviderVerification", code.data);
+        assert.equal(code.data.data.code, "238641");
+        assert.match(code.data.data.link, /verify/);
+        const checked = await f.request(
+          `/api/providers/accounts/${a.id}/check`,
+          {},
+          "POST",
+        );
+        conforms("checkProviderAccount", checked.data);
+        assert.equal(
+          (await f.request(`/api/providers/accounts/${a.id}`)).data.data
+            .auth_status,
+          "healthy",
+        );
+      }
+      conforms("listMailProviders", (await f.request("/api/providers")).data);
+      const list = await f.request("/api/providers/accounts");
+      conforms("listProviderAccounts", list.data);
+      assert.equal(JSON.stringify(list.data).includes(password), false);
+      assert.equal(JSON.stringify(list.data).includes(token), false);
+    });
+    assert.deepEqual(
+      new Set(calls.map((c) => c.host)),
+      new Set(["api.mail.tm", "api.mail.gw"]),
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("stored passwords and tokens are encrypted; detail reveals password only to approved credentials", async () => {
+  const f = await database();
+  f.env.CREDENTIAL_ENCRYPTION_KEY = "f".repeat(40);
+  try {
+    await provider(async () => {
+      const a = await connect(f);
+      const raw = await f.DB.prepare(
+        "SELECT password, token FROM provider_accounts WHERE id = ?",
+      )
+        .bind(a.id)
+        .first<{ password: string; token: string }>();
+      assert.match(raw!.password, /^enc:v1:/);
+      assert.match(raw!.token, /^enc:v1:/);
+      const detail = await f.request(`/api/providers/accounts/${a.id}`);
+      conforms("getProviderAccount", detail.data);
+      assert.equal(detail.data.data.password, password);
+      assert.equal("token" in detail.data.data, false);
+      assert.equal(
+        (
+          await f.request(
+            `/api/providers/accounts/${a.id}`,
+            undefined,
+            "GET",
+            {},
+          )
+        ).response.status,
+        401,
+      );
+      const verify = await createApiKey(f.env, {
+        name: "verify",
+        scopes: ["verify:read"],
+        restrictions: { emails: [address] },
+      });
+      const wrong = await createApiKey(f.env, {
+        name: "wrong",
+        scopes: ["admin"],
+        restrictions: { emails: ["other@example.test"] },
+      });
+      const own = await createApiKey(f.env, {
+        name: "own",
+        scopes: ["admin"],
+        restrictions: { emails: [address] },
+      });
+      assert.equal(
+        (
+          await f.request(`/api/providers/accounts/${a.id}`, undefined, "GET", {
+            "X-API-Key": verify.key,
+          })
+        ).response.status,
+        403,
+      );
+      assert.equal(
+        (
+          await f.request(
+            `/api/providers/accounts/${a.id}/code`,
+            undefined,
+            "GET",
+            { "X-API-Key": verify.key },
+          )
+        ).response.status,
+        200,
+      );
+      assert.equal(
+        (
+          await f.request(`/api/providers/accounts/${a.id}`, undefined, "GET", {
+            "X-API-Key": wrong.key,
+          })
+        ).response.status,
+        403,
+      );
+      assert.equal(
+        (
+          await f.request(`/api/providers/accounts/${a.id}`, undefined, "GET", {
+            "X-API-Key": own.key,
+          })
+        ).response.status,
+        200,
+      );
+      assert.equal(
+        (
+          await f.request("/api/providers/accounts", undefined, "GET", {
+            "X-API-Key": own.key,
+          })
+        ).response.status,
+        403,
+      );
+      assert.equal(detail.response.headers.get("cache-control"), "no-store");
+    });
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("token expiry and revoked tokens reauthenticate once; wrong password never logs out administrator or leaks provider payload", async () => {
+  const f = await database();
+  try {
+    let a: any;
+    await provider(async () => {
+      a = await connect(f);
+    });
+    await db(f.env).mutate([
+      update("provider_accounts", eq("id", a.id), {
+        token_expires_at: "2000-01-01T00:00:00Z",
+      }),
+    ]);
+    const expired = await provider(async () => {
+      assert.equal(
+        (await f.request(`/api/providers/accounts/${a.id}/messages`)).response
+          .status,
+        200,
+      );
+    });
+    assert.equal(expired.calls.filter((c) => c.path === "/token").length, 1);
+    let rejected = false;
+    const revoked = await provider(
+      async () => {
+        assert.equal(
+          (await f.request(`/api/providers/accounts/${a.id}/messages`)).response
+            .status,
+          200,
+        );
+      },
+      (url) => {
+        if (url.pathname === "/messages" && !rejected) {
+          rejected = true;
+          return json({ secret: password }, 401);
+        }
+      },
+    );
+    assert.equal(revoked.calls.filter((c) => c.path === "/token").length, 1);
+    await db(f.env).mutate([
+      update("provider_accounts", eq("id", a.id), { token: "" }),
+    ]);
+    const bad = await provider(
+      async () => {
+        const r = await f.request(`/api/providers/accounts/${a.id}/messages`);
+        assert.equal(r.response.status, 400);
+        assert.equal(r.data.error, "PROVIDER_AUTH_FAILED");
+        assert.equal(JSON.stringify(r.data).includes(password), false);
+      },
+      (url) =>
+        url.pathname === "/token"
+          ? json({ description: password }, 401)
+          : undefined,
+    );
+    assert.equal(bad.calls.length, 1);
+    assert.equal(
+      (await f.request(`/api/providers/accounts/${a.id}`)).data.data
+        .auth_status,
+      "reauth_required",
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("new mailbox creation retains a recoverable local credential on ambiguous remote failure and never retries account creation", async () => {
+  const f = await database();
+  try {
+    const failed = await provider(
+      async () => {
+        const r = await f.request("/api/providers/accounts", {
+          provider: "mailtm",
+          mode: "create",
+          address,
+          password,
+        });
+        assert.equal(r.response.status, 502);
+        assert.ok(r.data.data.id);
+        assert.equal(JSON.stringify(r.data).includes(password), false);
+        return r.data.data.id as number;
+      },
+      (url) => {
+        if (url.pathname === "/accounts")
+          throw new Error("Timeout after provider commit");
+      },
+    );
+    assert.equal(failed.calls.filter((c) => c.path === "/accounts").length, 1);
+    const detail = await f.request(`/api/providers/accounts/${failed.result}`);
+    assert.equal(detail.data.data.password, password);
+    assert.equal(detail.data.data.auth_status, "error");
+    await provider(async () => {
+      assert.equal(
+        (await f.request(`/api/providers/accounts/${failed.result}/check`, {}))
+          .response.status,
+        200,
+      );
+      assert.equal(
+        (
+          await f.request("/api/providers/accounts", {
+            provider: "mailtm",
+            mode: "create",
+            address,
+            password,
+          })
+        ).response.status,
+        400,
+      );
+    });
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("provider identity mismatch is rejected, malformed domains and rate limits are explicit, disabled accounts perform no fetch", async () => {
+  const f = await database();
+  try {
+    await provider(
+      async () => {
+        const r = await f.request("/api/providers/accounts", {
+          provider: "mailtm",
+          address,
+          password,
+        });
+        assert.equal(r.response.status, 409);
+        assert.equal(await db(f.env).count("provider_accounts"), 0);
+      },
+      (url) =>
+        url.pathname === "/me"
+          ? json({ ...remote, address: "other@example.test" })
+          : undefined,
+    );
+    let a: any;
+    await provider(async () => {
+      a = await connect(f);
+    });
+    await provider(
+      async () => {
+        const r = await f.request(`/api/providers/accounts/${a.id}/messages`);
+        assert.equal(r.response.status, 429);
+        assert.equal(r.data.error, "PROVIDER_RATE_LIMITED");
+      },
+      (url) => (url.pathname === "/messages" ? json({}, 429) : undefined),
+    );
+    await provider(
+      async () => {
+        assert.equal(
+          (await f.request("/api/providers/mailtm/domains")).response.status,
+          502,
+        );
+      },
+      () => json({ "hydra:member": {}, "hydra:totalItems": 0 }),
+    );
+    await f.request(
+      `/api/providers/accounts/${a.id}`,
+      { status: "disabled" },
+      "PUT",
+    );
+    const disabled = await provider(async () => {
+      assert.equal(
+        (await f.request(`/api/providers/accounts/${a.id}/messages`)).response
+          .status,
+        400,
+      );
+    });
+    assert.equal(disabled.calls.length, 0);
+    assert.equal(
+      (
+        await f.request("/api/providers/accounts", {
+          provider: "https://evil.test",
+          address,
+          password,
+        })
+      ).response.status,
+      400,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("platform binding, health, unified verification and removal protections include external providers", async () => {
+  const f = await database();
+  try {
+    await provider(async () => {
+      const a = await connect(f);
+      const vault = await f.request("/api/vault", {
+        platform_name: "Provider app",
+        account_email: address,
+        email_source: "mailtm",
+      });
+      const vid = vault.data.data.id;
+      const before = await f.request("/api/automation/mailbox", {
+        vault_id: vid,
+      });
+      assert.equal(before.data.data.health.state, "unchecked");
+      const code = await f.request("/api/automation/verification", {
+        email: address,
+      });
+      assert.equal(code.response.status, 200, JSON.stringify(code.data));
+      assert.equal(code.data.data.source, "mailtm");
+      assert.equal(code.data.data.code, "238641");
+      assert.equal(
+        (await f.request(`/api/vault/${vid}/code`)).data.data.code,
+        "238641",
+      );
+      assert.equal(
+        (await f.request("/api/automation/mailbox", { vault_id: vid })).data
+          .data.health.state,
+        "connected",
+      );
+      assert.equal(
+        (
+          await f.request(
+            `/api/providers/accounts/${a.id}`,
+            undefined,
+            "DELETE",
+          )
+        ).response.status,
+        409,
+      );
+      await f.request(`/api/vault/${vid}`, undefined, "DELETE");
+      assert.equal(
+        (
+          await f.request(
+            `/api/providers/accounts/${a.id}`,
+            undefined,
+            "DELETE",
+          )
+        ).response.status,
+        200,
+      );
+      assert.equal(await db(f.env).count("provider_accounts"), 0);
+    });
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("editing during a slow provider request cannot restore stale token or overwrite the new credentials", async () => {
+  const f = await database();
+  try {
+    let a: any;
+    await provider(async () => {
+      a = await connect(f);
+    });
+    let changed = false;
+    await provider(
+      async () => {
+        const r = await f.request(`/api/providers/accounts/${a.id}/messages`);
+        assert.equal(r.response.status, 409);
+        assert.equal(r.data.error, "PROVIDER_ACCOUNT_CHANGED");
+      },
+      async (url) => {
+        if (url.pathname === "/messages" && !changed) {
+          changed = true;
+          const r = await f.request(
+            `/api/providers/accounts/${a.id}`,
+            { password: "new-password" },
+            "PUT",
+          );
+          assert.equal(r.response.status, 200);
+        }
+      },
+    );
+    const detail = await f.request(`/api/providers/accounts/${a.id}`);
+    assert.equal(detail.data.data.password, "new-password");
+    assert.equal(detail.data.data.auth_status, "unchecked");
+    const row = await db(f.env).first("provider_accounts", eq("id", a.id));
+    assert.equal(row!.token, "");
+    assert.equal(
+      (
+        await f.request(
+          `/api/providers/accounts/${a.id}`,
+          { remark: "late edit", credential_version: "old" },
+          "PUT",
+        )
+      ).response.status,
+      409,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("encrypted backups carry provider credentials and released schema 11 upgrades deterministically without provider rows", async () => {
+  const f = await database();
+  f.env.CREDENTIAL_ENCRYPTION_KEY = "e".repeat(40);
+  try {
+    await provider(async () => {
+      await connect(f);
+    });
+    const login = await f.request(
+      "/api/auth/login",
+      { password: f.env.ADMIN_PASSWORD },
+      "POST",
+      {},
+    );
+    const headers = {
+      Cookie: login.response.headers.get("set-cookie")!.split(";")[0],
+    };
+    const secret = "fictional-backup-passphrase";
+    const response = await f.request(
+      "/api/backups/export",
+      {
+        include_credentials: true,
+        confirm: "EXPORT_CREDENTIALS",
+        passphrase: secret,
+      },
+      "POST",
+      headers,
+    );
+    assert.equal(response.response.status, 200, JSON.stringify(response.data));
+    const backup = await openBackup(response.data, secret);
+    assert.equal(backup.manifest.schema_version, 12);
+    assert.equal(backup.tables.provider_accounts[0].password, password);
+    const redacted = await f.request(
+      "/api/backups/export",
+      undefined,
+      "GET",
+      headers,
+    );
+    assert.equal(JSON.stringify(redacted.data).includes(password), false);
+    assert.equal(JSON.stringify(redacted.data).includes(token), false);
+    await validateBackup(redacted.data);
+    const manifest = (
+      await f.request("/api/backups/manifest", undefined, "GET", headers)
+    ).data.data;
+    const oldSchema = { ...manifest.schema };
+    delete oldSchema.provider_accounts;
+    const { provider_accounts: _providers, ...tables } = backup.tables;
+    const old = {
+      manifest: {
+        ...backup.manifest,
+        schema_version: 11,
+        schema_hash: await digest(oldSchema),
+        data_hash: await digest(tables),
+        table_counts: { ...backup.manifest.table_counts },
+        table_hashes: { ...backup.manifest.table_hashes },
+      },
+      tables,
+    } as Schema11BackupDocument;
+    delete old.manifest.table_counts.provider_accounts;
+    delete old.manifest.table_hashes.provider_accounts;
+    const converted = await validateBackup(old);
+    assert.deepEqual(converted.tables.provider_accounts, []);
+    assert.deepEqual(converted.tables.platforms, backup.tables.platforms);
+    assert.deepEqual(await validateBackup(old), converted);
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("legacy verification detects provider ambiguity and accepts an explicit source without server errors", async () => {
+  const f = await database();
+  try {
+    await provider(async () => {
+      await connect(f, "mailtm");
+      await connect(f, "mailgw");
+      const ambiguous = await f.request(`/api/external/code?email=${address}`);
+      assert.equal(ambiguous.response.status, 409);
+      assert.equal(ambiguous.data.error, "AMBIGUOUS_SOURCE");
+      const found = await f.request(
+        `/api/external/code?email=${address}&source=mailtm`,
+      );
+      assert.equal(found.response.status, 200);
+      assert.equal(found.data.code, "238641");
+    });
+  } finally {
+    await f.dispose();
+  }
+});

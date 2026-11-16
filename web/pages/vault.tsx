@@ -1,3 +1,4 @@
+import { isMailProvider } from "../../shared/mail-providers";
 import { PlatformManager, PlatformEditor } from "@/features/platform-manager";
 import { VaultImportDialog } from "@/features/vault-import";
 import { AccountExportDialog } from "@/features/account-export";
@@ -124,8 +125,10 @@ import { toast } from "sonner";
 export const sources: [string, string][] = [
   ["cf_domain", "自建域名"],
   ["outlook", "Outlook"],
+  ["mailtm", "Mail.tm"],
+  ["mailgw", "Mail.gw"],
   ["external", "外部邮箱"],
-  ["gptmail", "公共邮箱"],
+  ["gptmail", "GPTMail（手动查收）"],
 ];
 const statuses: [string, string][] = [
   ["active", "使用中"],
@@ -1287,15 +1290,21 @@ function VaultAccountCard({
   const health = a.mailbox;
   const canOpenInbox =
     a.email_source === "cf_domain" ||
-    (a.email_source === "outlook" && !!health?.account_id);
+    ((a.email_source === "outlook" || isMailProvider(a.email_source)) &&
+      !!health?.account_id);
   const openInbox = () => {
-    if (a.email_source === "cf_domain") w.navigate("inbox", a.account_email);
+    if (isMailProvider(a.email_source))
+      w.navigate("providers", a.account_email);
+    else if (a.email_source === "cf_domain")
+      w.navigate("inbox", a.account_email);
     else if (a.email_source === "outlook" && health?.account_id)
       w.outlook(health.account_id, a.account_email);
   };
   const manage = () => {
     if (a.email_source === "outlook")
       w.repairOutlook({ id: health?.account_id, email: a.account_email });
+    else if (isMailProvider(a.email_source))
+      w.navigate("providers", a.account_email);
     else w.navigate("domains");
   };
   const items = [
@@ -1639,7 +1648,7 @@ function PasswordField({
   disabled?: boolean;
 }) {
   const id = useId();
-  const [visible, setVisible] = useState(false);
+  const [visible, setVisible] = useState(true);
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<PasswordOptions>({
     ...defaultPasswordOptions,

@@ -105,9 +105,11 @@ function target(value: Target) {
   if (
     value.source !== undefined &&
     (value.email === undefined ||
-      !["outlook", "cf_domain"].includes(value.source))
+      !["outlook", "cf_domain", "mailtm", "mailgw"].includes(value.source))
   )
-    invalid("source requires an email target and must be outlook or cf_domain");
+    invalid(
+      "source requires an email target and must be outlook, cf_domain, mailtm or mailgw",
+    );
 }
 function verificationInput(value: VerificationRequest) {
   target(value);
