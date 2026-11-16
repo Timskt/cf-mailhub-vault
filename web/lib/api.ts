@@ -55,7 +55,11 @@ export async function api<T = unknown>(
     pending.delete(controller);
   }
 }
-export function useResource<T>(path: string | null, revision = 0) {
+export function useResource<T>(
+  path: string | null,
+  revision = 0,
+  { keepPreviousData = false }: { keepPreviousData?: boolean } = {},
+) {
   const [state, setState] = useState<{
     path: string | null;
     result?: Reply<T>;
@@ -72,7 +76,7 @@ export function useResource<T>(path: string | null, revision = 0) {
     }
     setState((old) => ({
       path,
-      result: old.path === path ? old.result : undefined,
+      result: old.path === path || keepPreviousData ? old.result : undefined,
       loading: true,
     }));
     api<T>(path, "GET", undefined, controller.signal)
@@ -85,11 +89,17 @@ export function useResource<T>(path: string | null, revision = 0) {
           setState({ path, loading: false, error: error.message });
       });
     return () => controller.abort();
-  }, [path, revision, counter]);
+  }, [path, revision, counter, keepPreviousData]);
   return {
     ...(state.path === path
       ? state
-      : { loading: !!path, result: undefined, error: undefined }),
+      : {
+          loading: !!path,
+          // Opt in only for collections: credential detail requests must never
+          // display the previous account while loading a different identity.
+          result: path && keepPreviousData ? state.result : undefined,
+          error: undefined,
+        }),
     reload,
   };
 }

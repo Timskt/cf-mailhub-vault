@@ -250,6 +250,7 @@ export default function OutlookPage({
   const rows = useResource<Outlook[]>(
     `/api/outlook/accounts?${query({ ...accountFilters, page })}`,
     w.revision,
+    { keepPreviousData: true },
   );
   const groups = useResource<Organization[]>("/api/outlook/groups", w.revision);
   const tags = useResource<Organization[]>("/api/outlook/tags", w.revision);
@@ -492,7 +493,7 @@ export default function OutlookPage({
           setSelected([]);
         }}
       />
-      <div className="data-panel">
+      <div className="data-panel" aria-busy={rows.loading}>
         <div className="filter-bar">
           <SearchBox
             value={q}

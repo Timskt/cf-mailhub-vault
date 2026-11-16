@@ -100,6 +100,7 @@ export default function ProvidersPage({
   const rows = useResource<ProviderAccountSummary[]>(
     `/api/providers/accounts?${query({ q: search, provider, status, page })}`,
     w.revision,
+    { keepPreviousData: true },
   );
   const check = (account: ProviderAccountSummary) =>
     void action.run(async () => {
@@ -209,7 +210,7 @@ export default function ProvidersPage({
         邮件保留时间和账号有效期由服务商决定。平台保存登录凭据，令牌失效时自动重新登录；服务商删除邮箱后需要重新接入可用账号。
       </p>
       <ActionError message={action.error || catalog.error} />
-      <div className="data-panel">
+      <div className="data-panel" aria-busy={rows.loading}>
         <div className="filter-bar">
           <SearchBox
             value={q}

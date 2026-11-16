@@ -201,11 +201,48 @@ test("saved Outlook and vault passwords are visible, copyable and persist explic
   expect(created.ok()).toBe(true);
   const id = (await created.json()).data.id;
   await page.reload();
-  await page.getByRole("searchbox").first().fill(address);
-  await page
-    .getByRole("button", { name: `${address} 操作`, exact: true })
-    .first()
-    .click();
+  await expect(
+    page.getByRole("button", { name: `${address} 操作`, exact: true }).first(),
+  ).toBeVisible();
+  let releaseSearch!: () => void;
+  let searchStarted!: () => void;
+  const delayedSearch = new Promise<void>((resolve) => {
+    releaseSearch = resolve;
+  });
+  const searchRequest = new Promise<void>((resolve) => {
+    searchStarted = resolve;
+  });
+  await page.route("**/api/outlook/accounts?**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") === address) {
+      searchStarted();
+      await delayedSearch;
+    }
+    await route.continue();
+  });
+  try {
+    await page.getByRole("searchbox").first().fill(address);
+    await page
+      .getByRole("button", { name: `${address} 操作`, exact: true })
+      .first()
+      .click();
+    await searchRequest;
+    await expect(
+      page.getByRole("menuitem", { name: "编辑凭据", exact: true }),
+    ).toBeVisible({ timeout: 2000 });
+    const updated = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/outlook/accounts" &&
+        new URL(response.url()).searchParams.get("q") === address,
+    );
+    releaseSearch();
+    await updated;
+    await expect(
+      page.getByRole("menuitem", { name: "编辑凭据", exact: true }),
+    ).toBeVisible();
+  } finally {
+    releaseSearch();
+    await page.unrouteAll({ behavior: "wait" });
+  }
   await page.getByRole("menuitem", { name: "编辑凭据", exact: true }).click();
   let dialog = page.getByRole("dialog", {
     name: "编辑 Outlook 凭据",
