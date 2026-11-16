@@ -7,7 +7,7 @@
 - **数据源热切换**：同类型多个实例、不同数据库类型、不同服务器，后台全量复制与增量追平，逐页校验后切换；中断恢复、保留原数据集。支持 D1 → MySQL → MongoDB → Redis → D1。[接入与迁移文档](docs/DATABASES.md)。
 
 - **多邮件域名**：面板添加、停用、设置默认域名、备注用途，检查 MX/SPF，查看最近实际收件时间；生成邮箱时选择域名。兼容已有 `CF_DOMAINS` 配置。
-- **Outlook 工作区**：自有微软应用 OAuth、文本/CSV/JSON 批量导入、完整 JSON 导出、编辑凭据、连接测试、真实授权状态、分组和标签，以及批量移组、加/移除标签、启停和删除托管配置。
+- **Outlook 工作区**：自有微软应用自动回调、公共客户端手动授权码提取、绑定邮箱的授权修复、文本/CSV/JSON 批量导入、完整 JSON 导出、编辑凭据、连接测试、真实授权状态、分组和标签，以及批量移组、加/移除标签、启停和删除托管配置。
 - **微软邮件阅读**：收件箱、垃圾箱、已删除、存档、已发送和全邮箱，搜索、分页、HTML/纯文本正文、附件下载、删除邮件。HTML 使用隔离 iframe，脚本和表单禁用，外部图片默认阻止。
 - **Outlook 发信与回复**：明确授权 `Mail.Send` 后发送纯文本邮件、回复与小附件；失败保留草稿，持久幂等保护重试，同一账号共享发送频率限制。HTTP 202 表示微软接受请求，不表示已送达。
 - **取码**：平台台账直接查收绑定的 CF 或 Outlook 邮箱；Outlook 检查最近 25 封收件箱和 25 封垃圾邮件，支持时间、发件人和关键词筛选，保存刷新后的令牌。授权失败与没有邮件分别反馈。
@@ -102,7 +102,11 @@ pnpm exec wrangler secret put MICROSOFT_CLIENT_ID
 pnpm exec wrangler secret put MICROSOFT_CLIENT_SECRET
 ```
 
-将「设置 → 微软授权接入」显示的地址加入该应用的 Web 重定向 URI，例如：`https://vault.example.com/api/outlook/oauth/callback`。在实际访问的面板域名发起授权，回调域名必须匹配。授权使用 PKCE，state 只可使用一次并绑定当前管理员会话。组织可能要求管理员同意；应用 Secret 过期需要更新。
+将「设置 → Microsoft 连接」显示的地址加入该应用的 Web 重定向 URI，例如：`https://vault.example.com/api/outlook/oauth/callback`。在 Outlook 工作区点击「连接微软账号」，打开「连接 Outlook 邮箱」弹窗并选择自动回调；实际访问的面板域名必须与回调域名匹配。授权使用 PKCE，state 只可使用一次并绑定当前管理员会话，回调页通知原面板后自行关闭窗口。组织可能要求管理员同意；应用 Secret 过期需要更新。
+
+**手动授权与修复**：连接/修复面板也支持公共客户端授权码提取，默认使用 Thunderbird 公共 Client ID。回调固定为 `https://localhost`，必须已在所选应用注册；授权后立即复制完整回调网址，手动关闭授权页，再回原面板粘贴兑换。不使用 Client Secret，也不能复用本实例配置的 Web Client ID。state 有效 10 分钟，微软 code 通常约 1 分钟；兑换失败后需重新发起。公共应用可能受同意策略限制，推荐自有应用作为替代。
+
+修复会核验 Graph 返回的邮箱，保留原账号的密码、备注、分组、标签、平台关联和启停状态。成功保存后先测试收件；需要复制凭据时单独「查看 / 复制配置」。仅有 IMAP 权限不保证可读 Graph 邮件，发信需要单独勾选 `Mail.Send`，默认不申请。完整步骤、选错邮箱与过期处理见 [Outlook 授权与修复](docs/OUTLOOK-AUTHORIZATION.md)。
 
 每 15 分钟处理 1–8 个最早到期的账号。成功续期后安排约 6 小时再次刷新；队列积压时依次处理，临时故障按 15 分钟至 6 小时退避重试。请求包含 `offline_access`，微软返回的新 Refresh Token 会在继续操作前保存，并防止覆盖并发导入的新凭据。后台续期只刷新令牌，不读取邮件；页面分别显示连接状态、最近续期、下次尝试及失败原因。停用和明确要求重新授权的账号跳过；微软主动撤销授权或 SPA 令牌的固定期限不能靠定时任务无限延长。详见 [Outlook 续期说明](docs/OUTLOOK-RENEWAL.md)。
 
@@ -110,7 +114,7 @@ pnpm exec wrangler secret put MICROSOFT_CLIENT_SECRET
 
 ## 自动化 API
 
-开发者中心包含 125 个 HTTP 操作的搜索目录、接口详情抽屉、cURL / JavaScript / Python 示例、工作流与邮箱接入诊断。设置中可创建有有效期、权限范围以及邮箱/平台限制的自动化密钥，按最小权限选择 `verify:read`、`mailbox:write`、`vault:read`、`vault:write` 或 `admin`。密钥、审计、备份、数据源、凭据和 Webhook 管理及微软 OAuth 要求有效管理员会话，`admin` 子密钥也不能代替会话。请求头支持 `X-API-Key` 或 `Authorization: Bearer`，不接受 URL 密钥；显式密钥鉴权优先于 Cookie。
+开发者中心包含 127 个 HTTP 操作的搜索目录、接口详情抽屉、cURL / JavaScript / Python 示例、工作流与邮箱接入诊断，契约版本 2.4.0 新增手动授权兑换及安全修复诊断。设置中可创建有有效期、权限范围以及邮箱/平台限制的自动化密钥，按最小权限选择 `verify:read`、`mailbox:write`、`vault:read`、`vault:write` 或 `admin`。密钥、审计、备份、数据源、凭据和 Webhook 管理及微软 OAuth 要求有效管理员会话，`admin` 子密钥也不能代替会话。请求头支持 `X-API-Key` 或 `Authorization: Bearer`，不接受 URL 密钥；显式密钥鉴权优先于 Cookie。
 
 完整接入步骤见 [开发者指南](docs/API.md)。部署后提供 `/openapi.json`（OpenAPI 3.1）、`/postman.json`、`/llms.txt`、`/llms-full.txt`、`/api-doc.md`；保留 `/api-doc.json` 目录兼容。接口定义位于 `shared/api-contract.ts`，运行 `pnpm docs:generate` 更新仓库文档，`pnpm docs:check` 防止文档过期。
 

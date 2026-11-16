@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { useSmartPolling } from "@/hooks/use-smart-polling";
 import { date, query, safeUrl } from "@/lib/api";
 import type { Code } from "@/lib/types";
+import { useWorkspace } from "@/lib/context";
 
 export type VerificationTarget = { path: string; label: string };
 
@@ -173,6 +174,10 @@ export function VerificationLookup({
   path: string;
   onSettled?: () => void;
 }) {
+  const w = useWorkspace();
+  const outlookId = path.match(
+    /^\/api\/outlook\/accounts\/(\d+)\/code(?:\?|$)/,
+  )?.[1];
   const [range, setRange] = useState("86400");
   const [sender, setSender] = useState("");
   const [keyword, setKeyword] = useState("");
@@ -186,6 +191,9 @@ export function VerificationLookup({
   const r = useSmartPolling<Code>(
     `${path}${path.includes("?") ? "&" : "?"}${query(filters)}`,
     {
+      // Vault lookups publish their result via onSettled(w.refresh). Feeding
+      // that revision back into the same lookup would create a request loop.
+      revision: outlookId ? w.revision : 0,
       durationMs: 180000,
       fingerprint: ({ data }) =>
         JSON.stringify([
@@ -332,7 +340,20 @@ export function VerificationLookup({
         </p>
       )}
       {r.error ? (
-        <ErrorState message={r.error} retry={() => startQuery()} />
+        <div className="flex flex-col items-start gap-3">
+          <ErrorState message={r.error} retry={() => startQuery()} />
+          {outlookId && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                r.stop();
+                w.repairOutlook({ id: Number(outlookId) });
+              }}
+            >
+              检查授权与修复连接
+            </Button>
+          )}
+        </div>
       ) : !result ? (
         <Loading />
       ) : (

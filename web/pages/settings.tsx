@@ -257,7 +257,9 @@ function SettingsForm({ settings }: { settings: Settings }) {
         <Card>
           <CardHeader>
             <CardTitle>Microsoft 连接</CardTitle>
-            <CardDescription>使用自己的微软应用连接 Outlook。</CardDescription>
+            <CardDescription>
+              自动回调与授权码提取，按应用类型选择连接方式。
+            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <Badge
@@ -290,7 +292,10 @@ function SettingsForm({ settings }: { settings: Settings }) {
               </div>
             </div>
           </CardContent>
-          <CardFooter>
+          <CardFooter className="flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => w.repairOutlook({})}>
+              打开 Outlook 授权工具
+            </Button>
             <Button variant="outline" asChild>
               <a
                 href="https://entra.microsoft.com/"

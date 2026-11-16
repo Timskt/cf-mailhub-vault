@@ -2293,7 +2293,7 @@
           "name": "listOutlookAccounts · 分页查询 Outlook 池",
           "request": {
             "method": "GET",
-            "description": "列表不含密码/Refresh Token。检查续期时还需 token_refresh_status，不能只看 active。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "description": "列表不含密码/Refresh Token。省略 attention 不按需处理状态过滤；attention=true 包含收件授权异常或自动续期重试/需重授权的 active 账号，attention=false 排除该并集。auth_status 精确匹配原始字段，与 attention 取交集。例如 auth_status=healthy&attention=true 返回上次收件健康但续期 retrying/reauth_required 的 active 账号，响应中的 auth_status 仍为 healthy；auth_status=healthy 单独使用也保留这些账号。summary.attention 按全池并集统计，summary.healthy/unchecked 排除该并集，汇总桶互斥且不受当前分页/筛选影响。使用 status=active、对应 auth_status 和 attention=false 可按健康/待检查汇总桶的规则筛选。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/outlook/accounts",
@@ -2345,7 +2345,13 @@
                 {
                   "key": "auth_status",
                   "value": "",
-                  "description": "上次收件检查状态",
+                  "description": "精确匹配原始 auth_status 字段，与 attention 等其他筛选取交集；healthy/unchecked 仍可能因续期异常进入 attention",
+                  "disabled": true
+                },
+                {
+                  "key": "attention",
+                  "value": "",
+                  "description": "省略时不按需处理状态过滤；true 筛选 active 且（auth_status 为 error/reauth_required 或 token_refresh_status 为 retrying/reauth_required）的账号并集；false 排除该并集（仍可包含 disabled）。两者均与原始 auth_status 及其他筛选取交集。",
                   "disabled": true
                 }
               ],
@@ -2410,6 +2416,35 @@
                 "outlook",
                 "accounts",
                 ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "1",
+                  "description": "记录 ID"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "getOutlookRecovery · 读取 Outlook 授权修复诊断",
+          "request": {
+            "method": "GET",
+            "description": "管理员 Cookie 或 admin grant 可用；资源受限 Key 仍按账号实际邮箱/关联平台校验范围，越权返回 403 RESOURCE_FORBIDDEN。仅返回选定的账号标识、连接/续期状态和 diagnosis，不含密码、Refresh Token 或 Access Token。action 为 authorize/retry/enable/configure/check；此诊断不是实时连接测试，需检查时调用 checkOutlookConnection。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：只读本地状态；不请求微软、不刷新令牌、不修改账号",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/accounts/:id/recovery",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "accounts",
+                ":id",
+                "recovery"
               ],
               "query": [],
               "variable": [
@@ -2509,7 +2544,7 @@
           "name": "exportOutlookAccounts · 按范围导出 Outlook 凭据",
           "request": {
             "method": "GET",
-            "description": "ids 省略时按列表筛选条件导出，最多一万条；提供 ids 时保持 1–100 条的所选导出规则。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。客户端可转为固定四段文本或 CSV，无 format 查询参数。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "description": "ids 省略时按列表筛选条件导出：attention=true 取需处理并集，false 排除该并集，省略不按需处理状态过滤，均与原始 auth_status 等筛选取交集；最多一万条。提供 ids 时按 1–100 个所选 ID 导出，忽略其他筛选。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。授权兑换结果不返回令牌，需要查看/复制凭据时单独调用此接口。客户端可转为固定四段文本或 CSV，无 format 查询参数。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/outlook/accounts/export",
@@ -2556,7 +2591,13 @@
                 {
                   "key": "auth_status",
                   "value": "",
-                  "description": "上次收件检查状态",
+                  "description": "精确匹配原始 auth_status 字段，与 attention 等其他筛选取交集；healthy/unchecked 仍可能因续期异常进入 attention",
+                  "disabled": true
+                },
+                {
+                  "key": "attention",
+                  "value": "",
+                  "description": "省略时不按需处理状态过滤；true 筛选 active 且（auth_status 为 error/reauth_required 或 token_refresh_status 为 retrying/reauth_required）的账号并集；false 排除该并集（仍可包含 disabled）。两者均与原始 auth_status 及其他筛选取交集。",
                   "disabled": true
                 }
               ],
@@ -3771,10 +3812,10 @@
           }
         },
         {
-          "name": "startOutlookOAuth · 发起微软浏览器授权",
+          "name": "startOutlookOAuth · 发起微软自动回调或手动授权",
           "request": {
             "method": "POST",
-            "description": "需要有效管理员 Cookie 和自有微软应用；在浏览器打开返回的 url，由用户完成微软授权。默认申请 offline_access/Mail.ReadWrite/User.Read；send_mail=true 额外申请 Mail.Send。旧令牌不会自动获得发信权限，需要重新授权。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：修改业务数据",
+            "description": "仅管理员 Cookie；保留根字段 url，并新增 data:{state,mode,expires_at,redirect_uri,client_id}，expires_at 是 UNIX 秒。mode 默认 web，使用已配置的 MICROSOFT_CLIENT_ID/SECRET 和当前站点回调；manual 使用公共客户端，无 client_secret，默认 Thunderbird Client ID，固定回调 https://localhost，须由所选公共应用注册，且不能使用本实例配置的 Web Client ID。两种模式均用 PKCE S256；account_id/email 可绑定待修复邮箱，Graph 核验邮箱必须匹配。默认申请 offline_access/Mail.ReadWrite/User.Read；send_mail 默认为 false，true 才额外申请 Mail.Send。公共应用授权可能受微软/租户策略限制，建议自建应用作为替代。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：创建绑定当前管理员会话的一次性 state 与 PKCE 上下文，10 分钟后过期",
             "auth": {
               "type": "noauth"
             },
@@ -3806,7 +3847,52 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"group_id\": 1,\n  \"send_mail\": true\n}",
+              "raw": "{\n  \"mode\": \"web\",\n  \"email\": \"user@outlook.com\",\n  \"group_id\": 1,\n  \"send_mail\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "exchangeOutlookOAuth · 兑换手动授权码并保存 Outlook 凭据",
+          "request": {
+            "method": "POST",
+            "description": "仅接受发起 manual 授权时的同一管理员 Cookie，不能兑换 web 会话。提交 {state,response}，response 为匹配本次回调的完整 URL 或原始 code。state 有效 10 分钟，微软 code 通常约 1 分钟且仅可兑换一次；开始请求微软前消费 state，超时/兑换失败也须重新发起。成功只返回 data:{id,email,status,auth_status}，无令牌。Graph 返回邮箱必须匹配绑定目标；不匹配、会话失效/已使用或账号并发变更时拒绝保存并要求重新开始，OAUTH_RESTART_REQUIRED 为 409；兑换/身份核验失败为 502 OAUTH_EXCHANGE_FAILED/OAUTH_PROFILE_FAILED。已有账号保留密码、备注、分组、标签、平台关联和 active/disabled 状态；auth_status 重置为 unchecked，保存不代表收件健康。查看/复制凭据请单独 GET /api/outlook/accounts/export?ids={id}。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：请求微软前原子消费一次性 state；兑换令牌、核验 Graph 邮箱后保存凭据，重置收件检查为 unchecked 与续期状态",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/outlook/oauth/exchange",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "outlook",
+                "oauth",
+                "exchange"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"REPLACE_WITH_START_STATE\",\n  \"response\": \"https://localhost/?code=REPLACE_WITH_FRESH_CODE&state=REPLACE_WITH_START_STATE\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -3819,7 +3905,7 @@
           "name": "finishOutlookOAuth · 微软 OAuth 回调",
           "request": {
             "method": "GET",
-            "description": "由微软回调，不要手工调用；需要原始管理员会话 Cookie。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：消费一次性状态并保存授权",
+            "description": "由微软回调，仅接受原始管理员会话 Cookie 和 web state；不用于 manual 模式。返回 HTML，并向同源 opener 发送 {type:'mailhub-outlook-oauth',success,message,state,account?} 后由回调页自行关闭窗口，成功 account 为 {id,email,status,auth_status}，不含令牌。消费、邮箱核验及元数据保留规则与 exchange 相同；失败也通过 HTML/payload 报告，HTTP 200 不代表授权成功。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：消费一次性 web 状态，核验 Graph 邮箱并保存凭据，收件状态重置为 unchecked",
             "auth": {
               "type": "noauth"
             },

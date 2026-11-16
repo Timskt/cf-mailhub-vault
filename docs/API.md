@@ -1,6 +1,6 @@
 # MailHub & Vault 开发者指南
 
-契约版本 **2.3.0**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
+契约版本 **2.4.0**，共 **127 个 HTTP 操作**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
 
 - [OpenAPI 3.1](http://localhost:8787/openapi.json)：用于生成类型、客户端、导入 API 工具。
 - [Postman 集合](http://localhost:8787/postman.json)：设置 base_url 和 api_key 后选择请求。
@@ -158,7 +158,7 @@ Example----demo@example.com----Example-password-42----demo----external----开发
 
 GET /api/vault/export 支持与列表相同的筛选参数（如 platform/mailbox/q/status/triage）及可选 ids=1,2（最多 100 个）。提供 ids 时与筛选取交集，任何所选记录丢失或不匹配返回 409；省略 ids 可导出全部或当前筛选，上限一万条。
 
-GET /api/outlook/accounts/export 的 ids 也可省略，导出全部或 q/group_id/tag_id/status/auth_status 筛选结果，上限一万条；提供 ids 时沿用 1–100 个所选 ID 的导出语义。两类接口均返回 version/exported_at/accounts JSON，UI 再转换为可预览、复制或下载的 ---- 文本/CSV；服务端没有 format=text 或 format=csv 参数。平台账号文本不替代含空平台目录的完整加密业务备份。
+GET /api/outlook/accounts/export 的 ids 也可省略，导出全部或 q/group_id/tag_id/status/auth_status/attention 筛选结果，上限一万条；提供 ids 时只按 1–100 个所选 ID 导出，忽略其他筛选。attention 与 Outlook 列表相同：省略不按需处理状态过滤，true 筛选 active 且收件授权 error/reauth_required 或续期 retrying/reauth_required 的并集，false 排除该并集；均与原始 auth_status 等筛选取交集。两类接口均返回 version/exported_at/accounts JSON，UI 再转换为可预览、复制或下载的 ---- 文本/CSV；服务端没有 format=text 或 format=csv 参数。平台账号文本不替代含空平台目录的完整加密业务备份。
 
 Outlook 标准文本为“邮箱----密码----client_id----refresh_token”（英文表头 email/password/client_id/refresh_token），可附加 remark 列。Outlook 的导入请求与鉴权契约保持原样。导出包含登录凭据，仅在明确选择范围后读取；不要把示例中的虚构密码当作真实账号配置。
 
@@ -198,9 +198,54 @@ CF 详情返回 has_raw 和 attachments（id/name/size/contentType），不返�
 
 台账摘要新增 has_totp/has_password，为整数 0/1；不返回密码或 TOTP 秘钥。仅在使用者显式查看/导出后请求单条详情，禁止为了批量展示验证码而预取所有密钥。
 
+## Outlook 授权与修复
+
+GET /api/outlook/accounts/{id}/recovery 返回 {success:true,data:{account,diagnosis}}。account 仅含 id/email/client_id/group_id/status/auth_status/last_error/last_error_code/last_checked_at/token_refresh_status/token_refresh_error/next_token_refresh_at；diagnosis 为 {kind,title,description,action}，action 是 authorize/retry/enable/configure/check。该接口只读取本地状态，不访问微软或返回密码/令牌；接受管理员 Cookie 或 admin grant，受限 Key 仍校验账号实际邮箱及关联平台范围。实时验证使用 POST /api/outlook/accounts/{id}/check。
+
+GET /api/outlook/accounts?attention=true 筛选 **active 且（auth_status 为 error/reauth_required，或 token_refresh_status 为 retrying/reauth_required）** 的并集。attention=false 明确排除该并集，仍可包含 disabled 账号；省略 attention 则不按需处理状态过滤。列表及导出的 auth_status 精确匹配原始字段，与 attention 及其他筛选取交集：auth_status=healthy 仍可返回续期异常的账号，auth_status=healthy&attention=true 则只返回其中续期 retrying/reauth_required 的 active 账号，响应中的 auth_status 仍为 healthy；unchecked 同理。summary.attention 按全池并集计数，summary.healthy/unchecked 排除该并集，汇总桶互斥且不随分页/筛选变化。UI 的健康/待检查选择器同时使用 status=active、对应 auth_status 和 attention=false，按对应汇总桶的规则筛选；仅传原始 auth_status 的 API 行为保持不变。前端会把续期 retrying 的账号显示为 error 状态；该展示不改写 API 原始 auth_status。
+
+POST /api/outlook/oauth/start **仅接受管理员 Cookie**。JSON 字段均可选：mode 为 web（默认）或 manual；account_id/email 绑定目标账号；group_id 默认 1，仅用于新账号；client_id 仅 manual 使用；send_mail 是布尔值，默认 false。提供 account_id 时 email 必须与已有账号一致；仅提供 email 时会查找同邮箱账号，已有账号保留原分组。两种模式均使用 PKCE S256，默认请求 offline_access、Graph Mail.ReadWrite、User.Read，send_mail=true 才额外请求 Mail.Send。
+
+| 方式 | 应用与回调 | 完成授权 |
+| --- | --- | --- |
+| web（默认） | 自有 Web 应用，服务端配置 MICROSOFT_CLIENT_ID/SECRET；注册当前站点的 /api/outlook/oauth/callback | 用户打开返回的 url，服务端保存后回调页通知原面板并自行关闭窗口 |
+| manual | 公共客户端，默认 Thunderbird ID 9e5f94bc-e8a4-4e73-b8be-63364c29d753；固定 https://localhost，必须已在所选应用注册 | 用户复制回调网址或 code 后手动关闭授权页，用原会话调用 exchange |
+
+面板入口为 Outlook 工作区的「连接微软账号」，打开「连接 Outlook 邮箱」弹窗；Web 应用回调地址见「设置 → Microsoft 连接」。manual 模式下复制后关闭授权页，再回原面板粘贴并兑换，保留原面板的管理员会话；浏览器可能使原面板无法代为关闭授权窗口。
+
+manual 不使用 client_secret，也不能使用本实例 MICROSOFT_CLIENT_ID 对应的 Web 应用。公共客户端可能因微软/租户同意策略无法获取 Graph 权限；建议使用自己的应用，注册正确的回调与委派权限，或切换到自有 Web 应用。仅有 IMAP 权限的令牌不保证可读 Graph 邮件；历史 Graph Mail.Read 可阅读，但删除等写操作需 Mail.ReadWrite；Mail.Send 必须单独选择并同意。
+
+start 保留根字段 url，并返回 data:{state,mode,expires_at,redirect_uri,client_id}。expires_at 为 **UNIX 秒**，state 从发起起 10 分钟有效并绑定当前管理员会话；这是本地会话期限。微软授权码通常约 **1 分钟**过期，请授权后立即完成兑换（[微软官方协议说明](https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow)）。
+
+
+```
+curl --fail-with-body "$MAILHUB_URL/api/outlook/oauth/start" \
+  -H "Cookie: mailhub_session=$MAILHUB_ADMIN_COOKIE" \
+  -H 'Content-Type: application/json' \
+  --data '{"mode":"manual","account_id":1,"send_mail":false}'
+```
+
+
+POST /api/outlook/oauth/exchange 接收 {state,response}，须沿用 start 的同一 Cookie 且只能兑换 manual 会话。response 优先使用本次完整 https://localhost/?code=…&state=… 回调网址，也支持原始 code 值（可 URL 编码）。URL 的源站、路径和 state 必须匹配；不得有片段、用户名/密码或重复 code/state/error。response 最多 16384 字符，解析后 code 最多 8192 字符；服务端不会访问所粘贴的网址。
+
+
+```
+curl --fail-with-body "$MAILHUB_URL/api/outlook/oauth/exchange" \
+  -H "Cookie: mailhub_session=$MAILHUB_ADMIN_COOKIE" \
+  -H 'Content-Type: application/json' \
+  --data '{"state":"REPLACE_WITH_START_STATE","response":"https://localhost/?code=REPLACE_WITH_FRESH_CODE&state=REPLACE_WITH_START_STATE"}'
+```
+
+
+服务器在请求微软前原子消费 state，超时/兑换失败后也不能再次兑换同一会话；重新授权生成新的 state/code。Graph profile 返回的邮箱必须匹配已绑定目标，否则拒绝保存；账号在授权期间被修改/删除也会拒绝覆盖。HTTP 409 OAUTH_RESTART_REQUIRED 表示需要重新开始，OAuth 保存阶段的账号/分组并发校验冲突也统一使用该错误码；502 OAUTH_EXCHANGE_FAILED/OAUTH_PROFILE_FAILED 表示兑换或邮箱身份核验失败。返回未知结果时先读取账号核对，不能盲目重放 code；通用幂等回放不会延长 OAuth 会话或 code 的有效期。
+
+成功返回 {success:true,data:{id,email,status,auth_status:"unchecked"},message}，不返回 Access Token/Refresh Token。已有账号保留密码、备注、分组、标签、平台关联与 active/disabled 状态；凭据更新后重置收件检查与续期状态。保存后需测试实际收件；停用账号须单独启用。需要查看/复制凭据时单独调用 GET /api/outlook/accounts/export?ids={id}，按凭据保管导出文件。
+
+web 回调返回 HTML，并向同源 opener 发送 {type:"mailhub-outlook-oauth",success,message,state,account?} 后自行关闭窗口；成功的 account 使用同一安全摘要，不含令牌。客户端须检查消息 origin、source、state 和 success；HTTP 200 不能单独证明授权成功。完整中文操作与故障排查见仓库 docs/OUTLOOK-AUTHORIZATION.md。
+
 ## Outlook 发送、回复与续期
 
-POST /api/outlook/oauth/start 使用管理员会话和 {group_id:1,send_mail:true} 发起额外 Mail.Send 同意；默认只申请 offline_access/Mail.ReadWrite/User.Read。已有 Refresh Token 不会因 UI 出现发送按钮而获得权限。API 自身还需要 admin grant；PERMISSION_REQUIRED 的 required_scopes 列出微软所需权限。
+POST /api/outlook/oauth/start 使用管理员会话和 {account_id:1,send_mail:true} 为已有账号发起额外 Mail.Send 同意，可选 web 或 manual。默认只申请 offline_access/Mail.ReadWrite/User.Read。已有 Refresh Token 不会因 UI 出现发送按钮而获得权限。发送/回复 API 自身还需要 admin grant；PERMISSION_REQUIRED 的 required_scopes 列出微软所需权限。
 
 POST /api/outlook/accounts/{id}/send 使用 to（必填）、cc、bcc 邮箱数组，subject、body 纯文本及可选 attachments。三组地址合计 1–100 个，主题非空单行 ≤255 字符，正文非空 ≤100000 字符。附件为 {name,content_type,content_base64}，最多 10 个、解码后总计 ≤3 MiB；只接受规范标准 Base64。扩展名/MIME 必须匹配 txt/csv/pdf/png/jpg/jpeg/gif/webp/docx/xlsx/pptx/zip，文件名不能含路径或控制字符，UTF-8 ≤255 字节。没有 HTML 发信或任意发件人字段。
 
@@ -372,7 +417,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 
 ## 接口索引
 
-共 125 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
+共 127 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
 
 | operationId | 方法与路径 | 认证 / grants | 成功状态 | 用途 |
 | --- | --- | --- | --- | --- |
@@ -432,6 +477,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | listOutlookAccounts | GET `/api/outlook/accounts` | admin / admin | 200 | 分页查询 Outlook 池 |
 | saveOutlookAccount | POST `/api/outlook/accounts` | admin / admin | 200 | 保存 Outlook 凭据 |
 | getOutlookAccount | GET `/api/outlook/accounts/{id}` | admin / admin | 200 | 读取完整 Outlook 配置（包含凭据） |
+| getOutlookRecovery | GET `/api/outlook/accounts/{id}/recovery` | admin / admin | 200 | 读取 Outlook 授权修复诊断 |
 | updateOutlookAccount | PUT `/api/outlook/accounts/{id}` | admin / mailbox:write | 200 | 编辑 Outlook 配置 |
 | deleteOutlookAccount | DELETE `/api/outlook/accounts/{id}` | admin / mailbox:write | 200 | 删除托管 Outlook 配置 |
 | exportOutlookAccounts | GET `/api/outlook/accounts/export` | admin / admin | 200 | 按范围导出 Outlook 凭据（包含凭据） |
@@ -468,7 +514,8 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | loginAdmin | POST `/api/auth/login` | public | 200 | 管理员登录 |
 | logoutAdmin | POST `/api/auth/logout` | public | 200 | 退出当前会话 |
 | getSession | GET `/api/auth/me` | public | 200 | 查询当前 Cookie 会话 |
-| startOutlookOAuth | POST `/api/outlook/oauth/start` | cookie | 200 | 发起微软浏览器授权 |
+| startOutlookOAuth | POST `/api/outlook/oauth/start` | cookie | 200 | 发起微软自动回调或手动授权 |
+| exchangeOutlookOAuth | POST `/api/outlook/oauth/exchange` | cookie | 200 | 兑换手动授权码并保存 Outlook 凭据 |
 | finishOutlookOAuth | GET `/api/outlook/oauth/callback` | cookie | 200 | 微软 OAuth 回调 |
 | listScopedApiKeys | GET `/api/api-keys` | cookie | 200 | 分页读取 API Key 元数据 |
 | createScopedApiKey | POST `/api/api-keys` | cookie | 201 | 创建细分权限 API Key（包含凭据） |

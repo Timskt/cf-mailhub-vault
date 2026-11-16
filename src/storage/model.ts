@@ -192,6 +192,7 @@ export const schema = {
       verifier: "",
       session_hash: "",
       redirect_uri: "",
+      context: "{}",
       group_id: 1,
       expires_at: 0,
     },
@@ -274,6 +275,7 @@ export type Table = keyof typeof schema;
 // Older portable datasets have no physical ALTER TABLE. Keep queries and returned
 // rows consistent without rewriting their contents or changing snapshot hashes.
 export const readFallbacks: Partial<Record<Table, Row>> = {
+  oauth_sessions: { context: "{}" },
   accounts: { refresh_token_fingerprint: "" },
   cf_inbox_mails: {
     is_archived: 0,

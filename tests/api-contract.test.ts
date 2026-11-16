@@ -18,7 +18,12 @@ import {
   developerGuide,
   postmanCollection,
   webhookReceiverExample,
+  workflows,
 } from "../shared/api-guides";
+import {
+  MANUAL_REDIRECT_URI,
+  PUBLIC_CLIENT_ID,
+} from "../shared/outlook-recovery";
 import { app } from "../src/index";
 import { database, ACCOUNT, microsoft, json, mail } from "./helpers";
 import { db, eq, insert, update } from "../src/storage/client";
@@ -309,6 +314,20 @@ test("restore examples send the caller's stable Idempotency-Key in all languages
 test("OpenAPI covers every concrete route, has unique stable IDs and valid executable example schemas", () => {
   const spec = openApi();
   assert.equal(spec.openapi, "3.1.0");
+  assert.equal(operations.length, 127);
+  for (const [path, method, operationId] of [
+    ["/api/outlook/oauth/start", "post", "startOutlookOAuth"],
+    ["/api/outlook/oauth/callback", "get", "finishOutlookOAuth"],
+    ["/api/outlook/oauth/exchange", "post", "exchangeOutlookOAuth"],
+    ["/api/outlook/accounts/{id}/recovery", "get", "getOutlookRecovery"],
+  ])
+    assert.equal((spec.paths[path][method] as any).operationId, operationId);
+  for (const workflow of workflows)
+    for (const operationId of workflow.operations)
+      assert.ok(
+        operations.some((o) => o.operationId === operationId),
+        `${workflow.id}: ${operationId}`,
+      );
   const concrete = app.routes.filter(
     (r) =>
       r.method !== "ALL" &&
@@ -791,9 +810,10 @@ test("incremental CF mail retrieval and mark_read=false preserve unread state wh
   }
 });
 
-test("2.3 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
+test("2.4 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
   const spec = openApi();
-  assert.equal(API_VERSION, "2.3.0");
+  assert.equal(API_VERSION, "2.4.0");
+  assert.equal(spec.info.version, API_VERSION);
   const entry = (operationId: string) => {
     const operation = operations.find((o) => o.operationId === operationId)!;
     return spec.paths[operation.path][operation.method] as any;
@@ -854,12 +874,44 @@ test("2.3 contract exposes actual success statuses, grants, body bounds and dura
     "getCredentialProtection",
     "listWebhooks",
     "startOutlookOAuth",
+    "exchangeOutlookOAuth",
+    "finishOutlookOAuth",
     "getApiKey",
     "changeAdminPassword",
   ]) {
     assert.deepEqual(entry(name).security, [{ AdminSession: [] }], name);
     assert.equal(entry(name)["x-authorization"].admin_scope_override, false);
   }
+  assert.deepEqual(entry("getOutlookRecovery").security, [
+    { ApiKey: [] },
+    { BearerAuth: [] },
+    { AdminSession: [] },
+  ]);
+  assert.deepEqual(
+    entry("getOutlookRecovery")["x-authorization"].required_grants,
+    ["admin"],
+  );
+  assert.equal(
+    entry("getOutlookRecovery")["x-authorization"].resource_restrictions_apply,
+    true,
+  );
+  for (const name of [
+    "startOutlookOAuth",
+    "exchangeOutlookOAuth",
+    "getOutlookRecovery",
+  ])
+    assert.equal(entry(name)["x-credential-response"], false);
+  const attention = entry("listOutlookAccounts").parameters.find(
+    (p: any) => p.name === "attention",
+  );
+  assert.deepEqual(attention.schema.enum, ["true", "false"]);
+  assert.equal(attention.schema.default, undefined);
+  assert.deepEqual(
+    entry("exportOutlookAccounts").parameters.find(
+      (p: any) => p.name === "attention",
+    ),
+    attention,
+  );
   const limitProperties = (schemas.BackupCapabilities.properties as any).limits
     .properties;
   assert.equal(limitProperties.max_plaintext_bytes.const, BACKUP_MAX_BYTES);
@@ -889,6 +941,361 @@ test("2.3 contract exposes actual success statuses, grants, body bounds and dura
     false,
   );
   assert.equal(restore.request.auth?.type, "noauth");
+});
+
+test("OAuth contract validates both start modes and a mocked manual exchange without exposing credentials", async () => {
+  const f = await database();
+  try {
+    f.env.MICROSOFT_CLIENT_ID = ACCOUNT.client_id;
+    f.env.MICROSOFT_CLIENT_SECRET = "contract-fixture-web-secret";
+    const session = {
+      Cookie: `mailhub_session=${await createSessionToken("admin", await getSessionSecret(f.env))}`,
+    };
+    const created = await f.request("/api/outlook/accounts", {
+      ...ACCOUNT,
+      status: "disabled",
+    });
+    const accountId = created.data.data.id;
+    const before = Math.floor(Date.now() / 1000);
+    const web = await f.request(
+      "/api/outlook/oauth/start",
+      {},
+      "POST",
+      session,
+    );
+    assert.equal(web.response.status, 200);
+    responseConforms("startOutlookOAuth", web.data);
+    assert.equal(web.data.data.mode, "web");
+    assert.equal(web.data.data.client_id, ACCOUNT.client_id);
+    assert.equal(
+      web.data.data.redirect_uri,
+      "https://mailhub.test/api/outlook/oauth/callback",
+    );
+
+    const request = {
+      mode: "manual",
+      account_id: accountId,
+      email: ACCOUNT.email,
+      send_mail: false,
+    };
+    conforms(schemas.OutlookOAuthStart, request, "manual start request");
+    const manual = await f.request(
+      "/api/outlook/oauth/start",
+      request,
+      "POST",
+      session,
+    );
+    assert.equal(manual.response.status, 200);
+    responseConforms("startOutlookOAuth", manual.data);
+    assert.equal(manual.data.data.mode, "manual");
+    assert.equal(manual.data.data.client_id, PUBLIC_CLIENT_ID);
+    assert.equal(manual.data.data.redirect_uri, MANUAL_REDIRECT_URI);
+    for (const start of [web.data, manual.data]) {
+      const params = new URL(start.url).searchParams;
+      assert.equal(params.get("state"), start.data.state);
+      assert.equal(params.get("redirect_uri"), start.data.redirect_uri);
+      assert.equal(params.get("code_challenge_method"), "S256");
+      assert.equal(params.get("scope")!.includes("Mail.Send"), false);
+      assert.ok(start.data.expires_at >= before + 600);
+      assert.ok(start.data.expires_at <= Math.floor(Date.now() / 1000) + 600);
+      for (const secret of [
+        ACCOUNT.refresh_token,
+        ACCOUNT.password,
+        f.env.MICROSOFT_CLIENT_SECRET,
+      ])
+        assert.ok(!JSON.stringify(start).includes(secret));
+    }
+    assert.throws(() =>
+      responseConforms("startOutlookOAuth", {
+        success: true,
+        url: web.data.url,
+      }),
+    );
+    assert.throws(() =>
+      responseConforms("startOutlookOAuth", {
+        ...manual.data,
+        data: { ...manual.data.data, expires_at: "1794787800" },
+      }),
+    );
+    const exchange = {
+      state: manual.data.data.state,
+      response: `${MANUAL_REDIRECT_URI}/?${new URLSearchParams({ state: manual.data.data.state, code: "fixture-code" })}`,
+    };
+    for (const response of [exchange.response, "fixture-code"])
+      conforms(
+        schemas.OutlookOAuthExchange,
+        { ...exchange, response },
+        "manual exchange request",
+      );
+    let tokenCalls = 0,
+      profileCalls = 0;
+    await microsoft(
+      (url, init) => {
+        if (url.hostname === "login.microsoftonline.com") {
+          tokenCalls++;
+          const params = new URLSearchParams(String(init.body));
+          assert.equal(params.get("client_id"), PUBLIC_CLIENT_ID);
+          assert.equal(params.get("client_secret"), null);
+          assert.equal(params.get("redirect_uri"), MANUAL_REDIRECT_URI);
+          assert.ok(params.get("code_verifier"));
+          return json({
+            access_token: "fixture-access-token",
+            refresh_token: ACCOUNT.refresh_token + "-new",
+          });
+        }
+        assert.equal(url.pathname, "/v1.0/me");
+        profileCalls++;
+        return json({ mail: ACCOUNT.email });
+      },
+      async () => {
+        const saved = await f.request(
+          "/api/outlook/oauth/exchange",
+          exchange,
+          "POST",
+          session,
+        );
+        assert.equal(saved.response.status, 200, JSON.stringify(saved.data));
+        responseConforms("exchangeOutlookOAuth", saved.data);
+        assert.deepEqual(saved.data.data, {
+          id: accountId,
+          email: ACCOUNT.email,
+          status: "disabled",
+          auth_status: "unchecked",
+        });
+        for (const field of [
+          "password",
+          "refresh_token",
+          "access_token",
+          "client_secret",
+        ])
+          assert.throws(() =>
+            responseConforms("exchangeOutlookOAuth", {
+              ...saved.data,
+              data: { ...saved.data.data, [field]: "fixture-secret" },
+            }),
+          );
+        assert.equal(
+          (
+            await f.request(
+              "/api/outlook/oauth/exchange",
+              exchange,
+              "POST",
+              session,
+            )
+          ).response.status,
+          409,
+        );
+      },
+    );
+    assert.equal(tokenCalls, 1);
+    assert.equal(profileCalls, 1);
+    for (const path of [
+      "/api/outlook/oauth/start",
+      "/api/outlook/oauth/exchange",
+    ])
+      assert.equal(
+        (await f.request(path, {}, "POST")).response.status,
+        401,
+        path,
+      );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("recovery contract validates safe account fields, diagnosis actions and email-restricted admin access", async () => {
+  const f = await database();
+  try {
+    const session = {
+      Cookie: `mailhub_session=${await createSessionToken("admin", await getSessionSecret(f.env))}`,
+    };
+    const account = await f.request("/api/outlook/accounts", ACCOUNT);
+    const accountId = account.data.data.id;
+    const path = `/api/outlook/accounts/${accountId}/recovery`;
+    await microsoft(
+      () => assert.fail("Recovery must not contact Microsoft"),
+      async () => {
+        for (const [patch, action] of [
+          [{ status: "disabled" }, "enable"],
+          [{ last_error_code: "invalid_client" }, "configure"],
+          [{ last_error_code: "ErrorAccessDenied" }, "authorize"],
+          [{ auth_status: "reauth_required" }, "authorize"],
+          [{ token_refresh_status: "retrying" }, "retry"],
+          [{ auth_status: "error" }, "check"],
+          [{ auth_status: "healthy" }, "check"],
+          [{ auth_status: "unchecked" }, "check"],
+        ] as const) {
+          await db(f.env).mutate([
+            update("accounts", eq("id", accountId), {
+              status: "active",
+              auth_status: "unchecked",
+              token_refresh_status: "pending",
+              last_error_code: "",
+              token_refresh_error: "",
+              ...patch,
+            }),
+          ]);
+          const recovery = await f.request(path, undefined, "GET", session);
+          assert.equal(recovery.response.status, 200);
+          responseConforms("getOutlookRecovery", recovery.data);
+          assert.equal(recovery.data.data.diagnosis.action, action);
+          assert.deepEqual(
+            Object.keys(recovery.data.data.account).sort(),
+            [
+              "id",
+              "email",
+              "client_id",
+              "group_id",
+              "status",
+              "auth_status",
+              "last_error",
+              "last_error_code",
+              "last_checked_at",
+              "token_refresh_status",
+              "token_refresh_error",
+              "next_token_refresh_at",
+            ].sort(),
+          );
+          for (const secret of [ACCOUNT.password, ACCOUNT.refresh_token])
+            assert.ok(!JSON.stringify(recovery.data).includes(secret));
+          assert.throws(() =>
+            responseConforms("getOutlookRecovery", {
+              ...recovery.data,
+              data: {
+                ...recovery.data.data,
+                account: {
+                  ...recovery.data.data.account,
+                  refresh_token: "fixture-secret",
+                },
+              },
+            }),
+          );
+          assert.throws(() =>
+            responseConforms("getOutlookRecovery", {
+              ...recovery.data,
+              data: {
+                ...recovery.data.data,
+                diagnosis: {
+                  ...recovery.data.data.diagnosis,
+                  action: "unknown",
+                },
+              },
+            }),
+          );
+        }
+        for (const [scopes, emails, expectedStatus, expectedError] of [
+          [["admin"], [ACCOUNT.email], 200, undefined],
+          [["admin"], ["other@outlook.com"], 403, "RESOURCE_FORBIDDEN"],
+          [["mailbox:write"], [ACCOUNT.email], 403, "INSUFFICIENT_SCOPE"],
+        ] as const) {
+          const key = await f.request(
+            "/api/api-keys",
+            {
+              name: "Recovery contract",
+              scopes,
+              restrictions: { emails },
+            },
+            "POST",
+            session,
+          );
+          assert.equal(key.response.status, 201);
+          const recovery = await f.request(path, undefined, "GET", {
+            "X-API-Key": key.data.data.key,
+          });
+          assert.equal(recovery.response.status, expectedStatus);
+          if (expectedStatus === 200)
+            responseConforms("getOutlookRecovery", recovery.data);
+          else assert.equal(recovery.data.error, expectedError);
+        }
+      },
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("Outlook list/export intersect raw auth_status with attention while summary buckets stay disjoint", async () => {
+  const f = await database();
+  try {
+    const fixtures = [
+      ["healthy", "active", "healthy", "healthy"],
+      ["unchecked", "active", "unchecked", "pending"],
+      ["auth", "active", "error", "pending"],
+      ["renewal", "active", "healthy", "retrying"],
+      ["both", "active", "reauth_required", "reauth_required"],
+      ["unchecked-renewal", "active", "unchecked", "reauth_required"],
+      ["disabled", "disabled", "reauth_required", "reauth_required"],
+    ];
+    await db(f.env).mutate(
+      fixtures.map(([name, status, auth_status, token_refresh_status]) =>
+        insert("accounts", {
+          ...ACCOUNT,
+          email: `${name}@outlook.com`,
+          status,
+          auth_status,
+          token_refresh_status,
+        }),
+      ),
+    );
+    const summary = {
+      total: 7,
+      disabled: 1,
+      healthy: 1,
+      unchecked: 1,
+      attention: 4,
+    };
+    for (const [query, names] of [
+      ["attention=true", ["auth", "renewal", "both", "unchecked-renewal"]],
+      ["attention=true&status=disabled", []],
+      ["attention=true&q=renewal", ["renewal", "unchecked-renewal"]],
+      ["auth_status=healthy", ["healthy", "renewal"]],
+      ["auth_status=unchecked", ["unchecked", "unchecked-renewal"]],
+      ["attention=true&auth_status=healthy", ["renewal"]],
+      ["attention=true&auth_status=unchecked", ["unchecked-renewal"]],
+      ["attention=true&auth_status=error", ["auth"]],
+      ["attention=true&auth_status=reauth_required", ["both"]],
+      ["attention=false", ["healthy", "unchecked", "disabled"]],
+      ["attention=false&auth_status=healthy", ["healthy"]],
+      ["attention=false&auth_status=unchecked", ["unchecked"]],
+    ] as const) {
+      const expected = names.map((name) => `${name}@outlook.com`).sort();
+      const listing = await f.request(`/api/outlook/accounts?${query}`);
+      assert.equal(listing.response.status, 200);
+      responseConforms("listOutlookAccounts", listing.data);
+      assert.deepEqual(
+        listing.data.data.map((row: any) => row.email).sort(),
+        expected,
+        query,
+      );
+      assert.deepEqual(listing.data.summary, summary);
+      const authStatus = new URLSearchParams(query).get("auth_status");
+      if (authStatus)
+        assert.ok(
+          listing.data.data.every((row: any) => row.auth_status === authStatus),
+          query,
+        );
+      const exported = await f.request(`/api/outlook/accounts/export?${query}`);
+      assert.equal(exported.response.status, 200);
+      responseConforms("exportOutlookAccounts", exported.data);
+      assert.deepEqual(
+        exported.data.accounts.map((row: any) => row.email).sort(),
+        expected,
+        query,
+      );
+    }
+    const selected = await f.request(
+      "/api/outlook/accounts/export?ids=1&attention=true",
+    );
+    responseConforms("exportOutlookAccounts", selected.data);
+    assert.equal(selected.data.accounts[0].email, "healthy@outlook.com");
+    assert.equal(
+      (await f.request("/api/outlook/accounts?attention=false")).data.total,
+      3,
+    );
+    assert.equal((await f.request("/api/outlook/accounts")).data.total, 7);
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("scoped key 201/metadata, session-only boundaries and composite grants match the public contract", async () => {

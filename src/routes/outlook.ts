@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { outlookDiagnosis } from "../../shared/outlook-recovery";
 import { runTokenRefresh } from "../cron";
 import { extractVerificationInfo } from "../code-extractor";
 import {
@@ -115,6 +116,13 @@ const authStates = [
   "reauth_required",
   "error",
 ] as const;
+const attentionFilter = and(
+  eq("status", "active"),
+  or(
+    oneOf("auth_status", ["error", "reauth_required"]),
+    oneOf("token_refresh_status", ["retrying", "reauth_required"]),
+  ),
+);
 async function accountFilter(env: Env, params: Record<string, string>) {
   const query = text(params.q, "搜索", 200).trim();
   const store = db(env),
@@ -168,6 +176,12 @@ async function accountFilter(env: Env, params: Record<string, string>) {
     filters.push(
       eq("auth_status", choice(params["auth_status"], "授权状态", authStates)),
     );
+  if (params["attention"] !== undefined)
+    filters.push(
+      choice(params["attention"], "待处理筛选", ["true", "false"]) === "true"
+        ? attentionFilter
+        : { not: attentionFilter },
+    );
   return and(...filters);
 }
 app.get("/accounts", async (c) => {
@@ -188,19 +202,17 @@ app.get("/accounts", async (c) => {
       store.count("accounts", eq("status", "disabled")),
       store.count(
         "accounts",
-        and(eq("status", "active"), eq("auth_status", "healthy")),
+        and(eq("status", "active"), eq("auth_status", "healthy"), {
+          not: attentionFilter,
+        }),
       ),
       store.count(
         "accounts",
-        and(eq("status", "active"), eq("auth_status", "unchecked")),
+        and(eq("status", "active"), eq("auth_status", "unchecked"), {
+          not: attentionFilter,
+        }),
       ),
-      store.count(
-        "accounts",
-        and(
-          eq("status", "active"),
-          oneOf("auth_status", ["error", "reauth_required"]),
-        ),
-      ),
+      store.count("accounts", attentionFilter),
     ]);
   const [groups, links, platforms, tags] = await Promise.all([
     collect(store, "groups", {
@@ -509,6 +521,38 @@ app.post("/accounts/batch", async (c) => {
       }),
     ]);
   return c.json({ success: true, message: `已处理 ${ids.length} 个账号` });
+});
+app.get("/accounts/:id/recovery", async (c) => {
+  const id = integer(c.req.param("id"), "账号 ID", 1, Number.MAX_SAFE_INTEGER);
+  const account = await db(c.env).first<OutlookAccount>(
+    "accounts",
+    eq("id", id),
+    {
+      columns: [
+        "id",
+        "email",
+        "client_id",
+        "group_id",
+        "status",
+        "auth_status",
+        "last_error",
+        "last_error_code",
+        "last_checked_at",
+        "token_refresh_status",
+        "token_refresh_error",
+        "next_token_refresh_at",
+      ],
+    },
+  );
+  if (!account)
+    return c.json(
+      { success: false, message: "该邮箱尚未加入 Outlook 账号池" },
+      404,
+    );
+  return c.json({
+    success: true,
+    data: { account, diagnosis: outlookDiagnosis(account) },
+  });
 });
 app.get("/accounts/:id", async (c) => {
   const account = await getAccount(

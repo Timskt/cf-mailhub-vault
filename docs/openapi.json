@@ -3,8 +3,8 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "MailHub & Vault API",
-    "version": "2.3.0",
-    "description": "自建多域名邮箱、Outlook 托管/发信、平台账号、事件通知及便携业务备份。现有 /api 路径保持兼容，2.3.0 为契约版本。支持细分 scope 和资源限制密钥；主密钥具有业务管理员权限，会话专属接口仍须 Cookie。权限见 x-authorization，副作用见 x-side-effects，成功状态包括 200/201/202。",
+    "version": "2.4.0",
+    "description": "自建多域名邮箱、Outlook 托管/发信、平台账号、事件通知及便携业务备份。现有 /api 路径保持兼容，2.4.0 为契约版本。支持细分 scope 和资源限制密钥；主密钥具有业务管理员权限，会话专属接口仍须 Cookie。权限见 x-authorization，副作用见 x-side-effects，成功状态包括 200/201/202。",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -9051,7 +9051,7 @@
       "get": {
         "operationId": "listOutlookAccounts",
         "summary": "分页查询 Outlook 池",
-        "description": "列表不含密码/Refresh Token。检查续期时还需 token_refresh_status，不能只看 active。",
+        "description": "列表不含密码/Refresh Token。省略 attention 不按需处理状态过滤；attention=true 包含收件授权异常或自动续期重试/需重授权的 active 账号，attention=false 排除该并集。auth_status 精确匹配原始字段，与 attention 取交集。例如 auth_status=healthy&attention=true 返回上次收件健康但续期 retrying/reauth_required 的 active 账号，响应中的 auth_status 仍为 healthy；auth_status=healthy 单独使用也保留这些账号。summary.attention 按全池并集统计，summary.healthy/unchecked 排除该并集，汇总桶互斥且不受当前分页/筛选影响。使用 status=active、对应 auth_status 和 attention=false 可按健康/待检查汇总桶的规则筛选。",
         "tags": [
           "Outlook"
         ],
@@ -9142,7 +9142,19 @@
                 "error"
               ]
             },
-            "description": "上次收件检查状态"
+            "description": "精确匹配原始 auth_status 字段，与 attention 等其他筛选取交集；healthy/unchecked 仍可能因续期异常进入 attention"
+          },
+          {
+            "name": "attention",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "省略时不按需处理状态过滤；true 筛选 active 且（auth_status 为 error/reauth_required 或 token_refresh_status 为 retrying/reauth_required）的账号并集；false 排除该并集（仍可包含 disabled）。两者均与原始 auth_status 及其他筛选取交集。"
           }
         ],
         "x-auth-mode": "admin",
@@ -9903,11 +9915,153 @@
         }
       }
     },
+    "/api/outlook/accounts/{id}/recovery": {
+      "get": {
+        "operationId": "getOutlookRecovery",
+        "summary": "读取 Outlook 授权修复诊断",
+        "description": "管理员 Cookie 或 admin grant 可用；资源受限 Key 仍按账号实际邮箱/关联平台校验范围，越权返回 403 RESOURCE_FORBIDDEN。仅返回选定的账号标识、连接/续期状态和 diagnosis，不含密码、Refresh Token 或 Access Token。action 为 authorize/retry/enable/configure/check；此诊断不是实时连接测试，需检查时调用 checkOutlookConnection。",
+        "tags": [
+          "Outlook"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "记录 ID",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "description": "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "只读本地状态；不请求微软、不刷新令牌、不修改账号",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/OutlookRecovery"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "account": {
+                      "id": 1,
+                      "email": "user@outlook.com",
+                      "client_id": "11111111-2222-4333-8444-555555555555",
+                      "group_id": 1,
+                      "status": "active",
+                      "auth_status": "reauth_required",
+                      "last_error": "需要重新授权",
+                      "last_error_code": "invalid_grant",
+                      "last_checked_at": "2026-11-16T00:00:00Z",
+                      "token_refresh_status": "reauth_required",
+                      "token_refresh_error": "invalid_grant",
+                      "next_token_refresh_at": ""
+                    },
+                    "diagnosis": {
+                      "kind": "authorization",
+                      "title": "需要重新授权",
+                      "description": "微软已撤销或拒绝当前授权，请登录目标邮箱重新同意权限。",
+                      "action": "authorize"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
     "/api/outlook/accounts/export": {
       "get": {
         "operationId": "exportOutlookAccounts",
         "summary": "按范围导出 Outlook 凭据",
-        "description": "ids 省略时按列表筛选条件导出，最多一万条；提供 ids 时保持 1–100 条的所选导出规则。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。客户端可转为固定四段文本或 CSV，无 format 查询参数。",
+        "description": "ids 省略时按列表筛选条件导出：attention=true 取需处理并集，false 排除该并集，省略不按需处理状态过滤，均与原始 auth_status 等筛选取交集；最多一万条。提供 ids 时按 1–100 个所选 ID 导出，忽略其他筛选。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。授权兑换结果不返回令牌，需要查看/复制凭据时单独调用此接口。客户端可转为固定四段文本或 CSV，无 format 查询参数。",
         "tags": [
           "Outlook"
         ],
@@ -9987,7 +10141,19 @@
                 "error"
               ]
             },
-            "description": "上次收件检查状态"
+            "description": "精确匹配原始 auth_status 字段，与 attention 等其他筛选取交集；healthy/unchecked 仍可能因续期异常进入 attention"
+          },
+          {
+            "name": "attention",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "省略时不按需处理状态过滤；true 筛选 active 且（auth_status 为 error/reauth_required 或 token_refresh_status 为 retrying/reauth_required）的账号并集；false 排除该并集（仍可包含 disabled）。两者均与原始 auth_status 及其他筛选取交集。"
           }
         ],
         "x-auth-mode": "admin",
@@ -15361,8 +15527,8 @@
     "/api/outlook/oauth/start": {
       "post": {
         "operationId": "startOutlookOAuth",
-        "summary": "发起微软浏览器授权",
-        "description": "需要有效管理员 Cookie 和自有微软应用；在浏览器打开返回的 url，由用户完成微软授权。默认申请 offline_access/Mail.ReadWrite/User.Read；send_mail=true 额外申请 Mail.Send。旧令牌不会自动获得发信权限，需要重新授权。",
+        "summary": "发起微软自动回调或手动授权",
+        "description": "仅管理员 Cookie；保留根字段 url，并新增 data:{state,mode,expires_at,redirect_uri,client_id}，expires_at 是 UNIX 秒。mode 默认 web，使用已配置的 MICROSOFT_CLIENT_ID/SECRET 和当前站点回调；manual 使用公共客户端，无 client_secret，默认 Thunderbird Client ID，固定回调 https://localhost，须由所选公共应用注册，且不能使用本实例配置的 Web Client ID。两种模式均用 PKCE S256；account_id/email 可绑定待修复邮箱，Graph 核验邮箱必须匹配。默认申请 offline_access/Mail.ReadWrite/User.Read；send_mail 默认为 false，true 才额外申请 Mail.Send。公共应用授权可能受微软/租户策略限制，建议自建应用作为替代。",
         "tags": [
           "会话"
         ],
@@ -15412,7 +15578,7 @@
           "unknown_outcome": "never_automatically_reexecute",
           "expired_complete": "may_be_removed_no_deduplication_guarantee"
         },
-        "x-side-effects": "修改业务数据",
+        "x-side-effects": "创建绑定当前管理员会话的一次性 state 与 PKCE 上下文，10 分钟后过期",
         "x-credential-response": false,
         "x-request-body-max-bytes": 2097152,
         "requestBody": {
@@ -15420,23 +15586,13 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "group_id": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000000
-                  },
-                  "send_mail": {
-                    "type": "boolean",
-                    "default": false
-                  }
-                },
-                "additionalProperties": true
+                "$ref": "#/components/schemas/OutlookOAuthStart"
               },
               "example": {
+                "mode": "web",
+                "email": "user@outlook.com",
                 "group_id": 1,
-                "send_mail": true
+                "send_mail": false
               }
             }
           }
@@ -15477,14 +15633,195 @@
                       "const": true
                     },
                     "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/OutlookOAuthSession"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "url",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                },
+                "example": {
+                  "success": true,
+                  "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=11111111-2222-4333-8444-555555555555&response_type=code&redirect_uri=https%3A%2F%2Fvault.example.com%2Fapi%2Foutlook%2Foauth%2Fcallback&scope=offline_access%20https%3A%2F%2Fgraph.microsoft.com%2FMail.ReadWrite%20https%3A%2F%2Fgraph.microsoft.com%2FUser.Read&state=EXAMPLE_ONLY_STATE&code_challenge=EXAMPLE_ONLY_PKCE_CHALLENGE&code_challenge_method=S256&prompt=select_account&response_mode=query&login_hint=user%40outlook.com",
+                  "data": {
+                    "state": "EXAMPLE_ONLY_STATE",
+                    "mode": "web",
+                    "expires_at": 1794787800,
+                    "redirect_uri": "https://vault.example.com/api/outlook/oauth/callback",
+                    "client_id": "11111111-2222-4333-8444-555555555555"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/outlook/oauth/exchange": {
+      "post": {
+        "operationId": "exchangeOutlookOAuth",
+        "summary": "兑换手动授权码并保存 Outlook 凭据",
+        "description": "仅接受发起 manual 授权时的同一管理员 Cookie，不能兑换 web 会话。提交 {state,response}，response 为匹配本次回调的完整 URL 或原始 code。state 有效 10 分钟，微软 code 通常约 1 分钟且仅可兑换一次；开始请求微软前消费 state，超时/兑换失败也须重新发起。成功只返回 data:{id,email,status,auth_status}，无令牌。Graph 返回邮箱必须匹配绑定目标；不匹配、会话失效/已使用或账号并发变更时拒绝保存并要求重新开始，OAUTH_RESTART_REQUIRED 为 409；兑换/身份核验失败为 502 OAUTH_EXCHANGE_FAILED/OAUTH_PROFILE_FAILED。已有账号保留密码、备注、分组、标签、平台关联和 active/disabled 状态；auth_status 重置为 unchecked，保存不代表收件健康。查看/复制凭据请单独 GET /api/outlook/accounts/export?ids={id}。",
+        "tags": [
+          "会话"
+        ],
+        "security": [
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+            "schema": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "x-auth-mode": "cookie",
+        "x-authorization": {
+          "admin_session_only": true,
+          "required_grants": [],
+          "grant_operator": "all",
+          "admin_scope_override": false,
+          "resource_restrictions_apply": false,
+          "description": "仅有效管理员会话；主密钥和 admin scope 均不能代替。不要同时携带 API Key。"
+        },
+        "x-idempotency": {
+          "supported": true,
+          "required": false,
+          "scope": [
+            "authenticated_actor",
+            "method",
+            "path"
+          ],
+          "request_identity": [
+            "raw_body",
+            "raw_query",
+            "content_type"
+          ],
+          "completed_retention_seconds": 604800,
+          "max_response_bytes": 262144,
+          "max_records_per_actor": 1000,
+          "unknown_outcome": "never_automatically_reexecute",
+          "expired_complete": "may_be_removed_no_deduplication_guarantee"
+        },
+        "x-side-effects": "请求微软前原子消费一次性 state；兑换令牌、核验 Graph 邮箱后保存凭据，重置收件检查为 unchecked 与续期状态",
+        "x-credential-response": false,
+        "x-request-body-max-bytes": 2097152,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutlookOAuthExchange"
+              },
+              "example": {
+                "state": "REPLACE_WITH_START_STATE",
+                "response": "https://localhost/?code=REPLACE_WITH_FRESH_CODE&state=REPLACE_WITH_START_STATE"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Idempotency-Replayed": {
+                "description": "只有成功回放时为 true；仍执行当前权限校验。",
+                "schema": {
+                  "type": "string",
+                  "const": "true"
+                }
+              },
+              "Idempotency-Key-Expires-At": {
+                "description": "首次预留起 7 天的成功结果回放截止时间；不表示未知结果可到期重执。",
+                "schema": {
+                  "type": "string",
+                  "maxLength": 40,
+                  "format": "date-time"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/OutlookOAuthAccount"
+                    },
+                    "message": {
                       "type": "string"
                     }
                   },
                   "required": [
                     "success",
-                    "url"
+                    "data"
                   ],
                   "additionalProperties": true
+                },
+                "example": {
+                  "success": true,
+                  "data": {
+                    "id": 1,
+                    "email": "user@outlook.com",
+                    "status": "active",
+                    "auth_status": "unchecked"
+                  },
+                  "message": "微软账号已授权并保存，请测试收件连接"
                 }
               }
             }
@@ -15526,7 +15863,7 @@
       "get": {
         "operationId": "finishOutlookOAuth",
         "summary": "微软 OAuth 回调",
-        "description": "由微软回调，不要手工调用；需要原始管理员会话 Cookie。",
+        "description": "由微软回调，仅接受原始管理员会话 Cookie 和 web state；不用于 manual 模式。返回 HTML，并向同源 opener 发送 {type:'mailhub-outlook-oauth',success,message,state,account?} 后由回调页自行关闭窗口，成功 account 为 {id,email,status,auth_status}，不含令牌。消费、邮箱核验及元数据保留规则与 exchange 相同；失败也通过 HTML/payload 报告，HTTP 200 不代表授权成功。",
         "tags": [
           "会话"
         ],
@@ -15574,7 +15911,7 @@
         "x-idempotency": {
           "supported": false
         },
-        "x-side-effects": "消费一次性状态并保存授权",
+        "x-side-effects": "消费一次性 web 状态，核验 Graph 邮箱并保存凭据，收件状态重置为 unchecked",
         "x-credential-response": false,
         "responses": {
           "200": {
@@ -22773,6 +23110,275 @@
           "auth_status"
         ],
         "additionalProperties": true
+      },
+      "OutlookOAuthStart": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "web",
+              "manual"
+            ],
+            "default": "web"
+          },
+          "account_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "修复已有账号时绑定该 ID；不能借重新授权更换其邮箱。"
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email",
+            "description": "可选目标邮箱；须与 account_id 一致。未提供 ID 时按邮箱查找已有账号；兑换后核验 Graph 返回的邮箱。"
+          },
+          "group_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "default": 1,
+            "description": "新账号的分组；绑定已有账号时保留原分组。"
+          },
+          "client_id": {
+            "type": "string",
+            "maxLength": 36,
+            "pattern": "^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$",
+            "default": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
+            "description": "仅 manual 使用，默认 Thunderbird 公共客户端。所选应用须注册 https://localhost 回调；不能填写本实例 MICROSOFT_CLIENT_ID 对应的 Web 应用。web 使用服务端配置并忽略此字段。"
+          },
+          "send_mail": {
+            "type": "boolean",
+            "default": false,
+            "description": "仅 true 时额外申请 Microsoft Graph Mail.Send。"
+          }
+        },
+        "additionalProperties": true
+      },
+      "OutlookOAuthSession": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "web",
+              "manual"
+            ]
+          },
+          "expires_at": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "本地授权会话到期时间，UNIX 秒（不是毫秒），发起后 10 分钟；不是微软授权码的有效期。"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "format": "uri",
+            "description": "web 为当前站点 /api/outlook/oauth/callback；manual 固定 https://localhost。"
+          },
+          "client_id": {
+            "type": "string",
+            "maxLength": 36,
+            "pattern": "^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$"
+          }
+        },
+        "required": [
+          "state",
+          "mode",
+          "expires_at",
+          "redirect_uri",
+          "client_id"
+        ],
+        "additionalProperties": false
+      },
+      "OutlookOAuthExchange": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "description": "本次 manual start 返回的 state。"
+          },
+          "response": {
+            "type": "string",
+            "maxLength": 16384,
+            "minLength": 1,
+            "description": "本次授权的完整 https://localhost/?code=…&state=… 回调网址，或原始 code 值（可 URL 编码）。URL 须匹配重定向源站、路径与 state，不接受片段、用户名/密码或重复 code/state/error；解析后 code 最多 8192 字符。不会访问粘贴的网址。"
+          }
+        },
+        "required": [
+          "state",
+          "response"
+        ],
+        "additionalProperties": true
+      },
+      "OutlookOAuthAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "auth_status": {
+            "type": "string",
+            "const": "unchecked"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "status",
+          "auth_status"
+        ],
+        "additionalProperties": false
+      },
+      "OutlookRecoveryAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          },
+          "client_id": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "auth_status": {
+            "type": "string",
+            "enum": [
+              "unchecked",
+              "healthy",
+              "reauth_required",
+              "error"
+            ]
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_error_code": {
+            "type": "string"
+          },
+          "last_checked_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          },
+          "token_refresh_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "healthy",
+              "retrying",
+              "reauth_required"
+            ]
+          },
+          "token_refresh_error": {
+            "type": "string"
+          },
+          "next_token_refresh_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "client_id",
+          "group_id",
+          "status",
+          "auth_status",
+          "last_error",
+          "last_error_code",
+          "last_checked_at",
+          "token_refresh_status",
+          "token_refresh_error",
+          "next_token_refresh_at"
+        ],
+        "additionalProperties": false
+      },
+      "OutlookRecoveryDiagnosis": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "诊断分类；客户端应容忍将来新增的 kind。"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "authorize",
+              "retry",
+              "enable",
+              "configure",
+              "check"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "title",
+          "description",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "OutlookRecovery": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/OutlookRecoveryAccount"
+          },
+          "diagnosis": {
+            "$ref": "#/components/schemas/OutlookRecoveryDiagnosis"
+          }
+        },
+        "required": [
+          "account",
+          "diagnosis"
+        ],
+        "additionalProperties": false
       },
       "Tag": {
         "type": "object",

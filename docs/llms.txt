@@ -1,6 +1,6 @@
 # MailHub & Vault
 
-> 邮箱、Outlook 与平台账号自动化 API。契约版本 2.3.0，保持现有 /api 路径兼容。
+> 邮箱、Outlook 与平台账号自动化 API。契约版本 2.4.0，保持现有 /api 路径兼容。
 
 ## 接入资料
 
@@ -14,6 +14,10 @@
 密钥仅放 Authorization: Bearer 或 X-API-Key；支持 verify:read、mailbox:write、vault:read、vault:write、admin 及精确邮箱/平台限制。读取每个操作的 x-authorization；admin scope 不能代替管理员会话。密钥管理、审计、备份、存储、凭据、Webhook、密码/主密钥与 OAuth 要求有效 Cookie。
 
 先调用 GET /api/capabilities。查收用 POST /api/automation/verification；outcome=empty 才表示无结果，错误不是空邮箱。轮询不要复用同一个 Idempotency-Key。写操作支持持久化去重：成功可回放至预留起 7 天，未知结果永不自动重执；409 IDEMPOTENCY_UNKNOWN 时查询资源，不能换键盲重试。
+
+Outlook 授权：POST /api/outlook/oauth/start 仅管理员 Cookie，mode=web（默认）自动回调或 manual 公共客户端（默认 Thunderbird ID 9e5f94bc-e8a4-4e73-b8be-63364c29d753），支持 account_id/email 绑定修复、group_id 与 send_mail（默认 false）。manual 固定 https://localhost，须由所选公共应用注册，不发送 client_secret，不能使用已配置的 Web Client ID。两种模式均用 PKCE；start 保留根 url 并返回 data:{state,mode,expires_at,redirect_uri,client_id}，expires_at 为 UNIX 秒。state 10 分钟有效；微软 code 通常约 1 分钟。manual 复制回调后由用户关闭授权页，再回原面板粘贴；web 回调页通知原面板后自行关闭窗口。POST /api/outlook/oauth/exchange 使用同一 Cookie 和 {state,response}，response 为匹配 state/回调的完整 URL 或原始 code；请求微软前消费 state，失败也须重新发起。Graph 核验邮箱须匹配绑定账号；成功仅返回 {id,email,status,auth_status:unchecked}，保留已有元数据和停用状态。需要复制令牌时单独 GET /api/outlook/accounts/export?ids={id}；保存后测试收件。
+
+GET /api/outlook/accounts/{id}/recovery 返回安全 account 与 diagnosis:{kind,title,description,action}，action 为 authorize/retry/enable/configure/check；不返回密码或令牌。接受 admin grant 或管理员 Cookie，受限 Key 仍检查账号实际邮箱/关联平台。列表及无 ids 的导出支持可选 attention：省略不按需处理状态过滤，true 筛选 active 且收件授权 error/reauth_required 或续期 retrying/reauth_required 的并集，false 明确排除该并集（仍可包含 disabled）。auth_status 精确匹配原始字段并与 attention 取交集；auth_status=healthy&attention=true 可返回续期异常的 active 账号，响应 auth_status 仍为 healthy，unchecked 同理。summary.healthy/unchecked 排除 attention 并集，汇总桶互斥且不随筛选变化。UI 健康/待检查选择器使用 status=active、对应 auth_status 和 attention=false，与汇总桶规则一致；API 单独按原始 auth_status 筛选的行为保持不变。前端将续期 retrying 显示为 error，不改写原始 auth_status。IMAP 权限不等同 Graph 邮件权限；Mail.Send 单独选择同意。公共客户端可能受微软/租户策略限制，推荐自有应用作为替代；操作说明见仓库 docs/OUTLOOK-AUTHORIZATION.md，协议参考 https://learn.microsoft.com/entra/identity-platform/v2-oauth2-auth-code-flow。
 
 Outlook send/reply 需要 API admin 和微软 Mail.Send，202 仅表示受理。附件总计 3 MiB、整包 5 MiB，其余 API 请求体 2 MiB。同账号发送/回复共用 60 秒 10 次、900 秒 60 次尝试限额，429 SEND_RATE_LIMITED 应先等 Retry-After。
 

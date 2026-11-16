@@ -117,6 +117,7 @@ export interface Outlook {
   remark: string;
   platform_count: number;
   last_error: string;
+  last_error_code?: string;
   last_checked_at?: string;
   last_token_refresh_at?: string;
   next_token_refresh_at?: string;

@@ -83,7 +83,7 @@ export async function createSessionToken(
   username: string,
   secret: string,
 ): Promise<string> {
-  const payload = `${username}:${Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS}`;
+  const payload = `${username}:${Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS}:${crypto.randomUUID()}`;
   return `${btoa(payload)}.${hex(await crypto.subtle.sign("HMAC", await key(secret), new TextEncoder().encode(payload)))}`;
 }
 export async function verifySessionToken(
@@ -97,7 +97,8 @@ export async function verifySessionToken(
     const parts = payload.split(":");
     const [username, expiry] = parts;
     if (
-      parts.length !== 2 ||
+      (parts.length !== 2 && parts.length !== 3) ||
+      (parts.length === 3 && !/^[a-f0-9-]{36}$/.test(parts[2])) ||
       username !== "admin" ||
       !/^\d+$/.test(expiry) ||
       Number(expiry) <= Date.now() / 1000

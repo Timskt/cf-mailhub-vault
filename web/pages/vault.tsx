@@ -1293,11 +1293,11 @@ function VaultAccountCard({
     else if (a.email_source === "outlook" && health?.account_id)
       w.outlook(health.account_id, a.account_email);
   };
-  const manage = () =>
-    w.navigate(
-      a.email_source === "outlook" ? "outlook" : "domains",
-      a.email_source === "outlook" ? a.account_email : "",
-    );
+  const manage = () => {
+    if (a.email_source === "outlook")
+      w.repairOutlook({ id: health?.account_id, email: a.account_email });
+    else w.navigate("domains");
+  };
   const items = [
     { label: "编辑账号", icon: <Pencil />, action: () => w.vault(a) },
     { label: "导出账号 / 复制配置", icon: <Download />, action: exportAccount },

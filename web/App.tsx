@@ -51,7 +51,11 @@ import {
   useDebounce,
   useResource,
 } from "@/lib/api";
-import { useWorkspace, WorkspaceContext } from "@/lib/context";
+import {
+  useWorkspace,
+  WorkspaceContext,
+  type OutlookRecoveryTarget,
+} from "@/lib/context";
 import { useTheme } from "@/lib/theme";
 import type {
   Mail as MailType,
@@ -105,6 +109,11 @@ const SettingsPage = lazy(() => import("@/pages/settings"));
 const ApiPage = lazy(() => import("@/pages/api"));
 const OutlookReader = lazy(() =>
   import("@/features/readers").then((m) => ({ default: m.OutlookReader })),
+);
+const OutlookRecoveryDialog = lazy(() =>
+  import("@/features/outlook-recovery").then((m) => ({
+    default: m.OutlookRecoveryDialog,
+  })),
 );
 const CfReader = lazy(() =>
   import("@/features/readers").then((m) => ({ default: m.CfReader })),
@@ -295,13 +304,25 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
   const [outlook, setOutlook] = useState<{ id: number; email: string } | null>(
     null,
   );
+  const [outlookRecovery, setOutlookRecovery] =
+    useState<OutlookRecoveryTarget | null>(null);
   const [mail, setMail] = useState<number | null>(null);
   const [code, setCode] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [search, setSearch] = useState(false);
-  const navigate = useCallback((page: PageName, q = "") => {
-    location.hash = page + (q ? `?${query({ q })}` : "");
-  }, []);
+  const navigate = useCallback(
+    (page: PageName, q = "") => {
+      if (outlookRecovery) {
+        // Settings opened from a repair must be reachable behind its readers.
+        setOutlook(null);
+        setCode(null);
+        setMail(null);
+        setVault(null);
+      }
+      location.hash = page + (q ? `?${query({ q })}` : "");
+    },
+    [outlookRecovery],
+  );
   useEffect(() => {
     const onHash = () => setRoute(currentPage());
     const key = (e: KeyboardEvent) => {
@@ -324,6 +345,8 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
     navigate,
     vault: setVault,
     outlook: (id: number, email: string) => setOutlook({ id, email }),
+    repairOutlook: (target: OutlookRecoveryTarget) =>
+      setOutlookRecovery((current) => current ?? { ...target }),
     mail: setMail,
     code: setCode,
     confirm: (
@@ -381,6 +404,12 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
           />
         )}
         {code && <CodeReader path={code} close={() => setCode(null)} />}
+        {outlookRecovery && (
+          <OutlookRecoveryDialog
+            target={outlookRecovery}
+            close={() => setOutlookRecovery(null)}
+          />
+        )}
       </Suspense>
       {search && <GlobalSearch close={() => setSearch(false)} />}
       {confirmation && (

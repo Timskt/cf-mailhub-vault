@@ -1,5 +1,11 @@
 import { createContext, useContext } from "react";
 import type { PageName, Settings, Vault } from "./types";
+export interface OutlookRecoveryTarget {
+  id?: number;
+  email?: string;
+  group_id?: number;
+  send_mail?: boolean;
+}
 export interface Workspace {
   settings?: Settings;
   revision: number;
@@ -7,6 +13,7 @@ export interface Workspace {
   navigate: (page: PageName, query?: string) => void;
   vault: (draft: Partial<Vault>) => void;
   outlook: (id: number, email: string) => void;
+  repairOutlook: (target: OutlookRecoveryTarget) => void;
   mail: (id: number) => void;
   code: (path: string) => void;
   confirm: (

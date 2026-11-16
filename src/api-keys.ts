@@ -316,7 +316,7 @@ function policy(method: string, path: string): Policy | null {
   if (match && method === "POST")
     return { scopes: ["admin"], resource: "outlook", id: Number(match[1]) };
   match = path.match(
-    /^\/api\/outlook\/accounts\/(\d+)(?:\/(code|check|emails|raw|messages(?:\/[^/]+(?:\/(?:raw|attachments(?:\/[^/]+)?))?)?))?$/,
+    /^\/api\/outlook\/accounts\/(\d+)(?:\/(code|check|recovery|emails|raw|messages(?:\/[^/]+(?:\/(?:raw|attachments(?:\/[^/]+)?))?)?))?$/,
   );
   if (match)
     return {

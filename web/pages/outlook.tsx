@@ -71,6 +71,7 @@ import {
   Tags,
   Trash2,
   Upload,
+  Wrench,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -78,6 +79,66 @@ import {
   accountTextColumns,
   accountTextTemplate,
 } from "../../shared/account-text";
+import { outlookDiagnosis } from "../../shared/outlook-recovery";
+
+function connectionStatus(a: Outlook) {
+  return a.status === "disabled"
+    ? "disabled"
+    : a.token_refresh_status === "reauth_required"
+      ? "reauth_required"
+      : a.token_refresh_status === "retrying"
+        ? "error"
+        : a.auth_status;
+}
+function needsRecovery(a: Outlook) {
+  return (
+    a.status === "active" &&
+    (["error", "reauth_required"].includes(a.auth_status) ||
+      ["retrying", "reauth_required"].includes(a.token_refresh_status || ""))
+  );
+}
+function RepairPanel({ onShowAll }: { onShowAll: () => void }) {
+  const w = useWorkspace();
+  const r = useResource<Outlook[]>(
+    "/api/outlook/accounts?attention=true&limit=3",
+    w.revision,
+  );
+  if (r.error) return <ErrorState message={r.error} retry={r.reload} />;
+  if (!r.result?.total) return null;
+  return (
+    <Alert className="mb-5">
+      <Wrench />
+      <AlertTitle>{r.result.total} 个邮箱需要处理</AlertTitle>
+      <AlertDescription className="flex flex-col gap-3">
+        <p>按账号查看原因，选择测试连接、修复应用配置或重新授权。</p>
+        {r.result.data.map((a) => (
+          <div
+            key={a.id}
+            className="flex min-w-0 flex-wrap items-center justify-between gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="break-all font-medium">{a.email}</p>
+              <p className="text-xs">{outlookDiagnosis(a).title}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => w.repairOutlook({ id: a.id, email: a.email })}
+              aria-label={`修复 ${a.email}`}
+            >
+              去修复
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button variant="link" size="sm" onClick={onShowAll}>
+            查看全部待处理账号
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 function RenewalStatus({ account }: { account: Outlook }) {
   if (account.status !== "active") return null;
@@ -169,7 +230,6 @@ export default function OutlookPage({
   } | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const [bulk, setBulk] = useState("");
-  const popup = useRef<Window | null>(null);
   const action = useAction();
   const search = useDebounce(q);
   const accountFilters = {
@@ -177,7 +237,13 @@ export default function OutlookPage({
     group_id: group,
     tag_id: tag,
     status: status === "disabled" ? "disabled" : status ? "active" : "",
-    auth_status: status === "disabled" ? "" : status,
+    auth_status: ["disabled", "attention"].includes(status) ? "" : status,
+    attention:
+      status === "attention"
+        ? "true"
+        : ["healthy", "unchecked"].includes(status)
+          ? "false"
+          : "",
   };
   const exportQuery = query(accountFilters);
   const rows = useResource<Outlook[]>(
@@ -201,56 +267,12 @@ export default function OutlookPage({
       return remaining.length === ids.length ? ids : remaining;
     });
   }, [rows.result]);
-  useEffect(() => {
-    const receive = (e: MessageEvent) => {
-      if (
-        e.origin !== location.origin ||
-        e.source !== popup.current ||
-        e.data?.type !== "mailhub-outlook-oauth"
-      )
-        return;
-      popup.current = null;
-      if (e.data.success) {
-        toast.success(e.data.message);
-        w.refresh();
-      } else toast.error(e.data.message);
-    };
-    window.addEventListener("message", receive);
-    return () => {
-      window.removeEventListener("message", receive);
-      popup.current?.close();
-    };
-  }, [w.refresh]);
-  const connect = (sendMail = false) => {
-    if (!w.settings?.oauth_configured) {
-      w.navigate("settings");
-      toast.info("请先配置微软应用，回调地址和步骤已列在设置中");
-      return;
-    }
-    popup.current = window.open(
-      "about:blank",
-      "mailhub-oauth",
-      "width=560,height=720",
-    );
-    if (!popup.current) {
-      toast.error("请允许弹出窗口后重试");
-      return;
-    }
-    popup.current.document.body.textContent = "正在准备微软授权…";
-    void action.run(async () => {
-      try {
-        const r = await api("/api/outlook/oauth/start", "POST", {
-          group_id: Number(group) || 1,
-          send_mail: sendMail,
-        });
-        if (popup.current && r.url) popup.current.location.href = r.url;
-      } catch (error) {
-        popup.current?.close();
-        popup.current = null;
-        throw error;
-      }
+  const connect = (sendMail = false) =>
+    w.repairOutlook({
+      group_id: Number(group) || 1,
+      ...(initialQuery.includes("@") ? { email: initialQuery } : {}),
+      send_mail: sendMail,
     });
-  };
   const applyBulk = async (type: string, value = "") => {
     let failed = 0;
     const size = type === "check" ? 10 : 50;
@@ -302,6 +324,11 @@ export default function OutlookPage({
       icon: <Activity />,
       disabled: action.busy,
       action: () => check(a),
+    },
+    {
+      label: "授权与修复",
+      icon: <Wrench />,
+      action: () => w.repairOutlook({ id: a.id, email: a.email }),
     },
     { label: "编辑凭据", icon: <Pencil />, action: () => setEditor(a) },
     {
@@ -454,6 +481,16 @@ export default function OutlookPage({
           </div>
         ))}
       </div>
+      <RepairPanel
+        onShowAll={() => {
+          setQ("");
+          setGroup("");
+          setTag("");
+          setStatus("attention");
+          setPage(1);
+          setSelected([]);
+        }}
+      />
       <div className="data-panel">
         <div className="filter-bar">
           <SearchBox
@@ -485,6 +522,7 @@ export default function OutlookPage({
             onChange={filter(setStatus)}
             options={[
               ["", "全部状态"],
+              ["attention", "全部待处理"],
               ["healthy", "连接正常"],
               ["reauth_required", "需重新授权"],
               ["error", "连接异常"],
@@ -657,11 +695,7 @@ export default function OutlookPage({
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Status
-                          value={
-                            a.status === "disabled" ? "disabled" : a.auth_status
-                          }
-                        />
+                        <Status value={connectionStatus(a)} />
                         <div
                           className="row-detail max-w-64"
                           title={a.last_error}
@@ -672,6 +706,17 @@ export default function OutlookPage({
                               : "导入后可测试连接")}
                         </div>
                         <RenewalStatus account={a} />
+                        {needsRecovery(a) && (
+                          <Button
+                            variant="link"
+                            size="sm"
+                            onClick={() =>
+                              w.repairOutlook({ id: a.id, email: a.email })
+                            }
+                          >
+                            修复连接
+                          </Button>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-1">
@@ -722,11 +767,7 @@ export default function OutlookPage({
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Badge variant="secondary">{a.group_name}</Badge>
-                    <Status
-                      value={
-                        a.status === "disabled" ? "disabled" : a.auth_status
-                      }
-                    />
+                    <Status value={connectionStatus(a)} />
                   </div>
                   <p className="row-detail">
                     {a.last_error ||
@@ -734,6 +775,18 @@ export default function OutlookPage({
                       `关联 ${a.platform_count} 个平台账号`}
                   </p>
                   <RenewalStatus account={a} />
+                  {needsRecovery(a) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        w.repairOutlook({ id: a.id, email: a.email })
+                      }
+                    >
+                      <Wrench data-icon="inline-start" />
+                      修复连接
+                    </Button>
+                  )}
                   <div className="flex gap-2">
                     <Button
                       variant="outline"
@@ -828,6 +881,14 @@ function OutlookEditor({
     status: initial.status || "active",
     remark: initial.remark || "",
   });
+  const unsavedCredentials = !!(
+    data.password ||
+    data.refresh_token ||
+    data.client_id !== (initial.client_id || "") ||
+    data.remark !== (initial.remark || "") ||
+    data.status !== (initial.status || "active") ||
+    (!!initial.id && Number(data.group_id) !== initial.group_id)
+  );
   const set = (k: keyof typeof data, v: string) =>
     setData((d) => ({ ...d, [k]: v }));
   return (
@@ -863,6 +924,35 @@ function OutlookEditor({
       >
         <ModalBody>
           <ActionError message={action.error} />
+          <Alert>
+            <KeyRound />
+            <AlertTitle>也可以通过微软授权更新凭据</AlertTitle>
+            <AlertDescription className="flex flex-col gap-2">
+              <p>
+                {unsavedCredentials
+                  ? "请先保存当前手动修改，再打开授权工具。"
+                  : "打开微软授权页，自动回调或粘贴授权码，即可获取并保存新的 Refresh Token。"}
+              </p>
+              <div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={unsavedCredentials || action.busy}
+                  onClick={() => {
+                    close();
+                    w.repairOutlook({
+                      id: initial.id,
+                      email: data.email || undefined,
+                      group_id: Number(data.group_id),
+                    });
+                  }}
+                >
+                  打开授权工具
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
           <FieldGroup className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <TextField
               label="邮箱"

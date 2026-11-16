@@ -278,11 +278,13 @@ function OutlookReaderContent({
   const w = useWorkspace();
   const rows = useSmartPolling<Mail[]>(
     `/api/outlook/accounts/${id}/emails?${query({ folder, q: search, cursor: cursors.at(-1), top: 20 })}`,
+    { revision: w.revision },
   );
   const detail = useResource<Mail>(
     message
       ? `/api/outlook/accounts/${id}/messages/${encodeURIComponent(message)}`
       : null,
+    w.revision,
   );
   const reset = () => {
     setCursors([""]);
@@ -362,6 +364,16 @@ function OutlookReaderContent({
             {rows.error ? (
               <div className="p-3">
                 <ErrorState message={rows.error} retry={rows.reload} />
+                <Button
+                  className="mt-3"
+                  variant="outline"
+                  onClick={() => {
+                    rows.stop();
+                    w.repairOutlook({ id, email });
+                  }}
+                >
+                  检查授权与修复连接
+                </Button>
               </div>
             ) : !rows.result ? (
               <div className="px-3">
