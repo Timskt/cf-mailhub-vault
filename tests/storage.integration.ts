@@ -61,6 +61,81 @@ const configs: SourceConfig[] = [
 ];
 const token = "local-integration-connector-token-32-characters";
 test(
+  "independent platforms rename, merge and preserve account credentials on every remote database",
+  { timeout: 60000 },
+  async () => {
+    for (const config of configs) {
+      const source = await connectSource(config);
+      try {
+        const port = source.port(crypto.randomUUID(), crypto.randomUUID());
+        await port.initialize({ version: 0, hash: "", counters: {} });
+        const store = new DirectStore(port);
+        await store.mutate([
+          {
+            op: "platform",
+            action: "create",
+            source: "Empty",
+            definition: { name_key: "empty", name: "Empty", remark: "keep" },
+          },
+          insert("platform_vault", {
+            platform_name: "Source",
+            account_email: "demo@example.test",
+            password: "preserved",
+          }),
+        ]);
+        await store.mutate([
+          {
+            op: "platform",
+            action: "update",
+            source: "source",
+            definition: { name_key: "renamed", name: "Renamed" },
+          },
+        ]);
+        await assert.rejects(
+          store.mutate([
+            { op: "platform", action: "delete", source: "renamed" },
+          ]),
+          /仍有账号/,
+        );
+        await store.mutate([
+          {
+            op: "platform",
+            action: "merge",
+            source: "Renamed",
+            target: "Empty",
+          },
+        ]);
+        assert.equal(await store.count("platforms"), 1, config.id);
+        assert.equal(
+          (await store.first("platforms"))?.remark,
+          "keep",
+          config.id,
+        );
+        const account = await store.first("platform_vault");
+        assert.equal(account?.platform_name, "Empty", config.id);
+        assert.equal(account?.password, "preserved", config.id);
+        await assert.rejects(
+          store.mutate([
+            {
+              op: "assertAbsent",
+              table: "platform_vault",
+              where: { field: "platform_name", op: "ieq", value: "EMPTY" },
+            },
+            insert("platform_vault", {
+              platform_name: "Empty",
+              account_email: "demo@example.test",
+            }),
+          ]),
+          /已变化/,
+        );
+        assert.equal(await store.count("platform_vault"), 1, config.id);
+      } finally {
+        await source.close();
+      }
+    }
+  },
+);
+test(
   "portable mail workflow fields and rules work on old MySQL, MongoDB and Redis datasets",
   { timeout: 60000 },
   async () => {

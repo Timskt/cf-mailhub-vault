@@ -2,6 +2,7 @@ import {
   QuickVerification,
   type VerificationTarget,
 } from "@/features/verification";
+import { AccountExportDialog } from "@/features/account-export";
 import {
   ActionError,
   Blank,
@@ -47,7 +48,6 @@ import {
   api,
   copy,
   date,
-  download,
   query,
   readFile,
   useAction,
@@ -59,6 +59,7 @@ import type { Organization, Outlook, Preview } from "@/lib/types";
 import {
   Activity,
   Copy,
+  Download,
   FolderInput,
   KeyRound,
   Link,
@@ -73,6 +74,10 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import {
+  accountTextColumns,
+  accountTextTemplate,
+} from "../../shared/account-text";
 
 function RenewalStatus({ account }: { account: Outlook }) {
   if (account.status !== "active") return null;
@@ -158,13 +163,25 @@ export default function OutlookPage({
   const [selected, setSelected] = useState<number[]>([]);
   const [editor, setEditor] = useState<Partial<Outlook> | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState<{
+    endpoint: string;
+    description: string;
+  } | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const [bulk, setBulk] = useState("");
   const popup = useRef<Window | null>(null);
   const action = useAction();
   const search = useDebounce(q);
+  const accountFilters = {
+    q: search,
+    group_id: group,
+    tag_id: tag,
+    status: status === "disabled" ? "disabled" : status ? "active" : "",
+    auth_status: status === "disabled" ? "" : status,
+  };
+  const exportQuery = query(accountFilters);
   const rows = useResource<Outlook[]>(
-    `/api/outlook/accounts?${query({ q: search, page, group_id: group, tag_id: tag, status: status === "disabled" ? "disabled" : status ? "active" : "", auth_status: status === "disabled" ? "" : status })}`,
+    `/api/outlook/accounts?${query({ ...accountFilters, page })}`,
     w.revision,
   );
   const groups = useResource<Organization[]>("/api/outlook/groups", w.revision);
@@ -299,17 +316,13 @@ export default function OutlookPage({
       action: () => w.navigate("vault", a.email),
     },
     {
-      label: "复制账号配置",
-      icon: <Copy />,
-      action: () => {
-        void action.run(async () => {
-          const r = await api<Outlook>(`/api/outlook/accounts/${a.id}`);
-          await copy(
-            `${r.data.email}----${r.data.password || ""}----${r.data.client_id}----${r.data.refresh_token}`,
-            "账号配置",
-          );
-        });
-      },
+      label: "导出账号 / 复制配置",
+      icon: <Download />,
+      action: () =>
+        setExporting({
+          endpoint: `/api/outlook/accounts/export?ids=${a.id}`,
+          description: `导出 ${a.email} 的凭据。可预览、复制固定格式文本，或下载 TXT、CSV、JSON。`,
+        }),
     },
     {
       label: a.status === "disabled" ? "启用账号" : "停用账号",
@@ -355,6 +368,21 @@ export default function OutlookPage({
         title="Outlook 工作区"
         description="管理微软邮箱的连接、收件与授权状态。"
       >
+        <Button
+          variant="outline"
+          disabled={q !== search}
+          onClick={() =>
+            setExporting({
+              endpoint: `/api/outlook/accounts/export${exportQuery ? `?${exportQuery}` : ""}`,
+              description: exportQuery
+                ? "按当前搜索、分组、标签和状态条件导出全部匹配账号，最多 10,000 个。"
+                : "导出工作区的全部 Outlook 账号，最多 10,000 个。",
+            })
+          }
+        >
+          <Download data-icon="inline-start" />
+          导出账号
+        </Button>
         <Button variant="outline" onClick={() => setImporting(true)}>
           <Upload data-icon="inline-start" />
           批量导入
@@ -511,17 +539,13 @@ export default function OutlookPage({
                 { label: "移除标签", action: () => setBulk("untag") },
                 {
                   label: "导出所选账号",
-                  action: () => {
-                    void action.run(async () => {
-                      download(
-                        await api(
-                          `/api/outlook/accounts/export?ids=${selected.join(",")}`,
-                        ),
-                        "mailhub-outlook.json",
-                      );
-                      toast.success("已导出，文件包含邮箱凭据");
-                    });
-                  },
+                  icon: <Download />,
+                  disabled: selected.length > 100,
+                  action: () =>
+                    setExporting({
+                      endpoint: `/api/outlook/accounts/export?ids=${selected.join(",")}`,
+                      description: `导出所选 ${selected.length} 个账号。可预览、复制固定格式文本，或下载 TXT、CSV、JSON。`,
+                    }),
                 },
                 {
                   label: "启用所选",
@@ -762,6 +786,14 @@ export default function OutlookPage({
       {importing && (
         <ImportOutlook groups={g} close={() => setImporting(false)} />
       )}
+      {exporting && (
+        <AccountExportDialog
+          kind="outlook"
+          endpoint={exporting.endpoint}
+          description={exporting.description}
+          close={() => setExporting(null)}
+        />
+      )}
       {organizing && (
         <Organize groups={g} tags={t} close={() => setOrganizing(false)} />
       )}
@@ -914,6 +946,29 @@ function ImportOutlook({
   const [group, setGroup] = useState("1");
   const [mode, setMode] = useState("skip");
   const [sync, setSync] = useState(true);
+  const [templateFormat, setTemplateFormat] = useState<"text" | "csv" | "json">(
+    "text",
+  );
+  const template =
+    templateFormat === "json"
+      ? JSON.stringify(
+          {
+            accounts: [
+              Object.fromEntries(
+                accountTextColumns("outlook", true).map(({ key, example }) => [
+                  key,
+                  example,
+                ]),
+              ),
+            ],
+          },
+          null,
+          2,
+        )
+      : accountTextTemplate("outlook", {
+          format: templateFormat,
+          includeRemark: templateFormat === "csv",
+        });
   const action = useAction({ inline: true });
   const version = useRef(0);
   const change = (v: string) => {
@@ -931,6 +986,60 @@ function ImportOutlook({
       <ModalBody>
         <ActionError message={action.error} />
         <FieldGroup>
+          <Alert>
+            <AlertTitle>固定文本格式 · 每条记录一个账号</AlertTitle>
+            <AlertDescription className="flex flex-col gap-2">
+              <code className="[overflow-wrap:anywhere]">
+                邮箱----密码----client_id----refresh_token
+              </code>
+              <p>
+                密码为空时保留位置；可在第 5
+                列附加备注。支持表头和“导出内容（格式：…）”说明。
+                字段含分隔符、换行、引号或首尾空格时，用双引号包住；内部引号写成两个双引号。
+              </p>
+              <p>
+                先预览检查格式，再确认导入。下方模板全部是虚构数据，请替换为自己的凭据。
+              </p>
+            </AlertDescription>
+          </Alert>
+          <SelectField
+            label="查看导入模板"
+            value={templateFormat}
+            onChange={(value) =>
+              setTemplateFormat(value as "text" | "csv" | "json")
+            }
+            options={[
+              ["text", "常用四列文本（---- 分隔）"],
+              ["csv", "CSV（带表头和备注）"],
+              ["json", "JSON（账号数组）"],
+            ]}
+          />
+          <Field>
+            <FieldLabel htmlFor="outlook-import-template">
+              导入模板（虚构数据）
+            </FieldLabel>
+            <Textarea
+              id="outlook-import-template"
+              value={template}
+              readOnly
+              autoComplete="off"
+              spellCheck={false}
+              wrap="off"
+              rows={3}
+              className="h-24 [field-sizing:fixed]"
+            />
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void copy(template, "导入模板")}
+              >
+                <Copy data-icon="inline-start" />
+                复制模板
+              </Button>
+            </div>
+          </Field>
           <Field>
             <FieldLabel htmlFor="outlook-file">选择文件</FieldLabel>
             <Input
@@ -958,9 +1067,8 @@ function ImportOutlook({
               placeholder="邮箱----密码----Client ID----Refresh Token"
             />
             <FieldDescription>
-              支持 邮箱----密码----Client ID----Refresh
-              Token，自动识别导出说明和表头。
-              先预览，再确认导入；预览只检查格式，不验证微软授权。
+              可直接粘贴上述格式，也可以选择 TXT、CSV 或 JSON 文件。
+              预览只检查格式，不验证微软授权；导入后可测试连接。
             </FieldDescription>
           </Field>
           <div className="form-grid">

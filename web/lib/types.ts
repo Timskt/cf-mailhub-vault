@@ -75,6 +75,7 @@ export interface MailboxHealth {
   checked_at?: string;
 }
 export interface VaultPlatform {
+  definition?: PlatformDefinition;
   platform_name: string;
   count: number;
   attention_count: number;
@@ -83,6 +84,18 @@ export interface VaultPlatform {
   pinned_count: number;
   sources: string[];
   categories: string[];
+}
+export interface PlatformDefinition {
+  name_key: string;
+  name: string;
+  url: string;
+  category: string;
+  remark: string;
+  is_pinned: number;
+  created_at: string;
+  updated_at: string;
+  account_count: number;
+  managed: boolean;
 }
 export interface Organization {
   id: number;

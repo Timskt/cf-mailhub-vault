@@ -9,6 +9,7 @@ import {
 import { auditIdentity, recordAudit } from "../audit";
 import { normalizeDomain } from "../domains";
 import { validateRule } from "../mail-workflows";
+import { platformKey } from "../platforms";
 import {
   canonical,
   db,
@@ -29,7 +30,7 @@ import {
 } from "../storage/coordinator";
 import { encryptCredentialRows } from "../storage/secure";
 import type { Env } from "../types";
-import { email, integer, invalid, object, text } from "../validation";
+import { email, httpUrl, integer, invalid, object, text } from "../validation";
 
 export const BACKUP_MAX_BYTES = 1024 * 1024;
 export const BACKUP_MAX_ROWS = 1000;
@@ -41,6 +42,76 @@ const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false });
 // Authorization and infrastructure state must come from the current dataset, not an upload.
 export const BACKUP_TABLES = PORTABLE_BACKUP_TABLES;
 type BackupTable = (typeof BACKUP_TABLES)[number];
+type LegacyBackupTable = Exclude<BackupTable, "platforms">;
+// Frozen schema 10 projection. Never derive legacy fields from the current model:
+// adding a field in a future release must not make it admissible in an old file.
+const LEGACY_BACKUP_SCHEMA: Record<
+  LegacyBackupTable,
+  { key: string[]; fields: string[] }
+> = {
+  settings: {
+    key: ["key"],
+    fields: "created_at key updated_at value".split(" "),
+  },
+  groups: {
+    key: ["id"],
+    fields: "color created_at description id name updated_at".split(" "),
+  },
+  tags: { key: ["id"], fields: "color created_at id name".split(" ") },
+  accounts: {
+    key: ["id"],
+    fields:
+      "auth_status client_id created_at email group_id id last_checked_at last_error last_error_code last_token_attempt_at last_token_refresh_at next_token_refresh_at password refresh_token remark status token_refresh_error token_refresh_failures token_refresh_status updated_at".split(
+        " ",
+      ),
+  },
+  account_tags: {
+    key: ["account_id", "tag_id"],
+    fields: ["account_id", "tag_id"],
+  },
+  cf_inbox_mails: {
+    key: ["id"],
+    fields:
+      "attachment_manifest category created_at dkim_status expires_at html_content id is_archived is_pinned is_protected is_read message_id raw_object_key raw_size recipient rule_name sender sender_name spf_status subject text_content verification_code verification_link".split(
+        " ",
+      ),
+  },
+  mail_rules: {
+    key: ["id"],
+    fields:
+      "action_category archive created_at domain enabled id mark_read name pin priority recipient sender_contains subject_contains updated_at verification_only".split(
+        " ",
+      ),
+  },
+  platform_vault: {
+    key: ["id"],
+    fields:
+      "account_email category created_at email_source id is_pinned last_code last_code_at password platform_name platform_url proxy_node remark status totp_secret updated_at username".split(
+        " ",
+      ),
+  },
+  temp_emails: {
+    key: ["id"],
+    fields: "created_at email id remark source updated_at".split(" "),
+  },
+  temp_mailboxes: {
+    key: ["id"],
+    fields:
+      "address associated_platform associated_vault_id created_at domain expires_at id is_permanent is_pinned prefix remark updated_at".split(
+        " ",
+      ),
+  },
+  domains: {
+    key: ["domain"],
+    fields:
+      "created_at dns_status domain enabled last_checked_at last_received_at remark updated_at".split(
+        " ",
+      ),
+  },
+};
+const LEGACY_BACKUP_TABLES = Object.keys(
+  LEGACY_BACKUP_SCHEMA,
+) as LegacyBackupTable[];
 const PREFERENCES = BACKUP_PREFERENCES;
 const EXCLUDED = [
   "administrator/session secrets",
@@ -98,6 +169,14 @@ const REDACTED: Record<BackupTable, readonly string[]> = {
     "created_at",
     "updated_at",
   ],
+  platforms: [
+    "name_key",
+    "name",
+    "category",
+    "is_pinned",
+    "created_at",
+    "updated_at",
+  ],
   platform_vault: [
     "id",
     "platform_name",
@@ -135,7 +214,7 @@ const REDACTED: Record<BackupTable, readonly string[]> = {
 export interface BackupManifest {
   format: typeof FORMAT;
   version: 1;
-  schema_version: 10;
+  schema_version: 11;
   schema_hash: string;
   created_at: string;
   redacted: boolean;
@@ -150,6 +229,10 @@ export interface BackupManifest {
 export interface BackupDocument {
   manifest: BackupManifest;
   tables: Record<BackupTable, Row[]>;
+}
+export interface LegacyBackupDocument {
+  manifest: Omit<BackupManifest, "schema_version"> & { schema_version: 10 };
+  tables: Record<LegacyBackupTable, Row[]>;
 }
 export interface EncryptedBackup {
   format: "mailhub-backup-encrypted";
@@ -218,7 +301,16 @@ async function encryptionKey(secret: string, salt: Uint8Array<ArrayBuffer>) {
     ["encrypt", "decrypt"],
   );
 }
-async function backupSchema() {
+async function backupSchema(version: 10 | 11 = 11): Promise<
+  Record<
+    string,
+    {
+      key: string[];
+      fields: string[];
+    }
+  >
+> {
+  if (version === 10) return LEGACY_BACKUP_SCHEMA;
   return Object.fromEntries(
     BACKUP_TABLES.map((table) => [
       table,
@@ -301,7 +393,7 @@ async function snapshot(env: Env, redacted: boolean) {
     manifest: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 10,
+      schema_version: 11,
       schema_hash: await digest(await backupSchema()),
       created_at: new Date().toISOString(),
       redacted,
@@ -319,7 +411,7 @@ async function snapshot(env: Env, redacted: boolean) {
   return { document, revision: end };
 }
 export async function sealBackup(
-  document: BackupDocument,
+  document: BackupDocument | LegacyBackupDocument,
   secret: string,
 ): Promise<EncryptedBackup> {
   bounded(document);
@@ -437,6 +529,7 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
     accounts: ["email"],
     cf_inbox_mails: ["recipient", "sender"],
     platform_vault: ["platform_name", "account_email"],
+    platforms: ["name_key", "name", "category"],
     temp_emails: ["email"],
     temp_mailboxes: ["address"],
     domains: ["domain"],
@@ -479,6 +572,16 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
       lower(row.address) !== `${lower(row.prefix)}@${row.domain}`
     )
       invalid("备份邮箱地址与前缀或域名不一致");
+  }
+  if (table === "platforms") {
+    const name = text(row.name, "平台名称", 100);
+    if (name !== name.trim() || row.name_key !== platformKey(name))
+      invalid("备份平台名称与规范主键不一致");
+    text(row.category, "平台分类", 100);
+    if (!redacted) {
+      httpUrl(row.url);
+      text(row.remark, "平台备注", 4000);
+    }
   }
   if (redacted) return;
   if (
@@ -557,11 +660,14 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     "excluded",
     "external_dependencies",
   ]);
+  const version = manifest.schema_version;
+  if (version !== 10 && version !== 11) invalid("备份格式或 schema 版本不兼容");
+  const model = await backupSchema(version);
+  const included = version === 10 ? LEGACY_BACKUP_TABLES : BACKUP_TABLES;
   if (
     manifest.format !== FORMAT ||
     manifest.version !== VERSION ||
-    manifest.schema_version !== 10 ||
-    manifest.schema_hash !== (await digest(await backupSchema())) ||
+    manifest.schema_hash !== (await digest(model)) ||
     manifest.consistency !== "revision_checked"
   )
     invalid("备份格式或 schema 版本不兼容");
@@ -578,13 +684,13 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
       canonical(EXTERNAL_DEPENDENCIES)
   )
     invalid("备份范围说明无效");
-  exactKeys(data, BACKUP_TABLES);
+  exactKeys(data, included);
   const counts = object(manifest.table_counts),
     hashes = object(manifest.table_hashes);
-  exactKeys(counts, BACKUP_TABLES);
-  exactKeys(hashes, BACKUP_TABLES);
+  exactKeys(counts, included);
+  exactKeys(hashes, included);
   let total = 0;
-  for (const table of BACKUP_TABLES) {
+  for (const table of included) {
     const rows = data[table];
     if (!Array.isArray(rows) || counts[table] !== rows.length)
       invalid("备份记录数不符");
@@ -597,11 +703,7 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
       );
     const keys = new Set<string>(),
       unique = schema[table].unique.map(() => new Set<string>());
-    const fields = manifest.redacted
-      ? REDACTED[table]
-      : Object.keys(schema[table].fields).filter(
-          (f) => f !== "refresh_token_fingerprint",
-        );
+    const fields = manifest.redacted ? REDACTED[table] : model[table].fields;
     for (const item of rows) {
       const row = object(item) as Row;
       exactKeys(row, fields);
@@ -628,9 +730,9 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     manifest.data_hash !== (await digest(data))
   )
     invalid("备份整体哈希不匹配");
-  const typed = document as unknown as BackupDocument,
+  const typed = document as unknown as BackupDocument | LegacyBackupDocument,
     t = typed.tables;
-  const has = (table: BackupTable, id: unknown) =>
+  const has = (table: LegacyBackupTable, id: unknown) =>
     t[table].some((row) => row.id === id);
   for (const row of t.accounts)
     if (row.group_id !== null && !has("groups", row.group_id))
@@ -650,7 +752,81 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
       )
         invalid("邮箱关联的台账不存在或地址不一致");
     }
-  return typed;
+  if (typed.manifest.schema_version === 10)
+    return upgradeLegacyBackup(typed as LegacyBackupDocument);
+  return typed as BackupDocument;
+}
+
+/** Only called after every original schema, content hash and business invariant
+ * passes. No current rows or wall clock are consulted, so preview/restore hashes
+ * stay identical. Original account rows, including case variants, are preserved. */
+async function upgradeLegacyBackup(
+  legacy: LegacyBackupDocument,
+): Promise<BackupDocument> {
+  const catalog = new Map<string, Row>();
+  for (const account of [...legacy.tables.platform_vault].sort(
+    (a, b) => Number(a.id) - Number(b.id),
+  )) {
+    const name = String(account.platform_name).trim(),
+      key = platformKey(name);
+    if (catalog.has(key)) continue;
+    let url = "";
+    if (!legacy.manifest.redacted) {
+      // Hand-created historical rows may contain an invalid URL. Keep that value
+      // on the untouched account; do not promote it to a clickable platform URL.
+      try {
+        url = httpUrl(account.platform_url ?? "");
+      } catch {
+        /* no safe URL */
+      }
+    }
+    const row: Row = {
+      name_key: key,
+      name,
+      url,
+      category: account.category || "其他",
+      remark: "",
+      is_pinned: 0,
+      created_at: account.created_at || legacy.manifest.created_at,
+      updated_at: account.updated_at || legacy.manifest.created_at,
+    };
+    catalog.set(
+      key,
+      legacy.manifest.redacted
+        ? Object.fromEntries(
+            REDACTED.platforms.map((field) => [field, row[field]]),
+          )
+        : row,
+    );
+  }
+  const tables = Object.fromEntries(
+    BACKUP_TABLES.map((table) => [
+      table,
+      table === "platforms" ? [...catalog.values()] : legacy.tables[table],
+    ]),
+  ) as Record<BackupTable, Row[]>;
+  const upgraded: BackupDocument = {
+    manifest: {
+      ...legacy.manifest,
+      schema_version: 11,
+      schema_hash: await digest(await backupSchema()),
+      table_counts: Object.fromEntries(
+        BACKUP_TABLES.map((table) => [table, tables[table].length]),
+      ),
+      table_hashes: Object.fromEntries(
+        await Promise.all(
+          BACKUP_TABLES.map(async (table) => [
+            table,
+            await digest(tables[table]),
+          ]),
+        ),
+      ),
+      data_hash: await digest(tables),
+    },
+    tables,
+  };
+  // The derived rows also count toward the existing restoration limits.
+  return validateBackup(upgraded);
 }
 
 interface Confirmation {
@@ -809,7 +985,7 @@ app.get("/manifest", async (c) => {
     data: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 10,
+      schema_version: 11,
       name: "便携业务备份",
       limits: {
         max_plaintext_bytes: BACKUP_MAX_BYTES,

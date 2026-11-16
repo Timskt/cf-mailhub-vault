@@ -1,6 +1,14 @@
 import { Hono } from "hono";
+import {
+  parseVaultImport,
+  validateVaultAccount,
+  vaultIdentity,
+  vaultSources,
+  vaultStatuses,
+} from "../vault-import";
 import { lookupCode, updateVaultCode } from "../codes";
 import { prepareMailbox, normalizeDomain } from "../domains";
+import { platformCatalog, platformKey } from "../platforms";
 import { outlookFailure } from "../outlook";
 import {
   enrichVault,
@@ -17,6 +25,7 @@ import {
   insert,
   now,
   oneOf,
+  or,
   remove,
   search,
   update,
@@ -36,26 +45,9 @@ import {
   text,
 } from "../validation";
 const app = new Hono<{ Bindings: Env }>();
-const sources = ["cf_domain", "outlook", "gptmail", "external"] as const;
-const statuses = ["active", "pending", "banned", "deprecated"] as const;
-function validated(input: unknown) {
-  const body = object(input);
-  const name = text(body.platform_name, "平台名称", 100).trim();
-  if (!name) invalid("平台名称不能为空");
-  return {
-    platform_name: name,
-    platform_url: httpUrl(body.platform_url),
-    account_email: email(body.account_email),
-    email_source: choice(body.email_source, "邮箱来源", sources, "cf_domain"),
-    username: text(body.username, "用户名", 254),
-    password: text(body.password, "密码", 1000),
-    totp_secret: text(body.totp_secret, "2FA", 1000),
-    status: choice(body.status, "账号状态", statuses, "active"),
-    category: text(body.category, "分类", 100, "其他"),
-    proxy_node: text(body.proxy_node, "节点", 300),
-    remark: text(body.remark, "备注", 4000),
-  };
-}
+const sources = vaultSources;
+const statuses = vaultStatuses;
+const validated = validateVaultAccount;
 export async function protectMailbox(env: Env, address: string) {
   const store = db(env);
   const account = await store.first<{ id: number; platform_name: string }>(
@@ -187,106 +179,187 @@ app.get("/", async (c) => {
   });
 });
 app.get("/export", async (c) => {
+  const ids = c.req
+    .query("ids")
+    ?.split(",")
+    .filter(Boolean)
+    .map((v) => integer(v, "账号 ID", 1, Number.MAX_SAFE_INTEGER));
+  if (ids && (!ids.length || ids.length > 100)) invalid("请选中 1–100 个账号");
+  let where = and(vaultWhere(c.req.query()), ids && oneOf("id", ids));
+  if (c.req.query("triage")) {
+    const triage = choice(c.req.query("triage"), "处理状态", triageStates);
+    const inventory = await vaultInventory(c.env, where);
+    where = and(
+      where,
+      oneOf(
+        "id",
+        inventory.filter((r) => matchesTriage(r, triage)).map((r) => r.id),
+      ),
+    );
+  }
   const results = await db(c.env).select("platform_vault", {
+    where,
     order: [["id", "asc"]],
     limit: 10001,
   });
-  if (results.length > 10000) invalid("账号超过一万条，请使用数据库备份");
+  if (results.length > 10000) invalid("账号超过一万条，请缩小筛选范围");
+  if (ids && results.length !== new Set(ids).size)
+    return c.json(
+      {
+        success: false,
+        message: "部分所选账号已不存在或不符合筛选，请刷新后重试",
+      },
+      409,
+    );
   return c.json(
     { version: 1, exported_at: new Date().toISOString(), accounts: results },
     200,
     { "Content-Disposition": 'attachment; filename="platform-vault.json"' },
   );
 });
+app.post("/import-preview", async (c) => {
+  const body = object(await c.req.json());
+  const { accounts, ...preview } = parseVaultImport(
+    body.raw_text,
+    text(body.platform_name, "默认平台", 100),
+  );
+  return c.json({ success: true, ...preview });
+});
 app.post("/import", async (c) => {
   const body = object(await c.req.json());
-  if (
-    !Array.isArray(body.accounts) ||
-    !body.accounts.length ||
-    body.accounts.length > 200
-  )
-    invalid("每批请提供 1–200 条平台账号记录");
-  const entries = [
-    ...new Map(
-      body.accounts.map((value) => {
-        const account = validated(value);
-        return [
-          `${account.platform_name.toLowerCase()}\0${account.account_email}\0${account.username}`,
-          account,
-        ] as const;
-      }),
-    ).values(),
-  ];
-  let changes = 0;
-  // Explicit logical identity preserves case-insensitive platform-name duplicate behavior.
-  const existing = await collect(db(c.env), "platform_vault", {
-    columns: ["platform_name", "account_email", "username"],
-  });
-  const identities = new Set(
-    existing.map(
-      (a) =>
-        `${String(a.platform_name).toLowerCase()}\0${a.account_email}\0${a.username}`,
-    ),
-  );
-  const pending = entries.filter(
-    (a) =>
-      !identities.has(
-        `${a.platform_name.toLowerCase()}\0${a.account_email}\0${a.username}`,
-      ),
-  );
-  if (pending.length) {
-    const [saved] = await db(c.env).mutate([
-      { op: "insert", table: "platform_vault", rows: pending },
-    ]);
-    changes = saved.changes;
-  }
-  const addresses = [
-    ...new Set(
-      entries
-        .filter((a) => a.email_source === "cf_domain")
-        .map((a) => a.account_email),
-    ),
-  ];
-  if (addresses.length) {
-    const linked = await collect(db(c.env), "platform_vault", {
-      where: and(
-        oneOf("account_email", addresses),
-        eq("email_source", "cf_domain"),
-      ),
-      columns: ["id", "platform_name", "account_email"],
-      order: [["id", "desc"]],
-    });
-    const first = [
-      ...new Map(linked.map((row) => [row.account_email, row])).values(),
+  if (body.accounts !== undefined && body.raw_text !== undefined)
+    invalid("accounts 与 raw_text 请只提供一种");
+  let entries: ReturnType<typeof validated>[];
+  let duplicateCount = 0;
+  if (body.raw_text !== undefined) {
+    const parsed = parseVaultImport(
+      body.raw_text,
+      text(body.platform_name, "默认平台", 100),
+    );
+    if (parsed.error_count)
+      invalid(
+        `有 ${parsed.error_count} 行格式错误，请先修正后重新预览；本次未写入任何账号`,
+      );
+    entries = parsed.accounts;
+    duplicateCount = parsed.duplicate_count;
+  } else {
+    if (
+      !Array.isArray(body.accounts) ||
+      !body.accounts.length ||
+      body.accounts.length > 200
+    )
+      invalid("每批请提供 1–200 条平台账号记录");
+    const all = body.accounts.map(validated);
+    entries = [
+      ...new Map(
+        all.map((account) => [vaultIdentity(account), account]),
+      ).values(),
     ];
-    await db(c.env).mutate([
-      {
-        op: "insert",
-        table: "temp_mailboxes",
-        conflict: "update",
-        rows: first.map((row) => {
-          const address = String(row.account_email),
-            [prefix, domain] = address.split("@");
-          return {
-            address,
-            prefix,
-            domain,
-            is_permanent: 1,
-            expires_at: "",
-            associated_vault_id: row.id,
-            associated_platform: row.platform_name,
-            updated_at: now(),
-          };
-        }),
-      },
-      update("cf_inbox_mails", oneOf("recipient", addresses), {
-        is_protected: 1,
-      }),
-    ]);
+    duplicateCount = all.length - entries.length;
   }
+  if (!entries.length) invalid("没有可导入的账号");
+  const mode = choice(
+    body.duplicate_mode,
+    "已有账号",
+    ["skip", "update"] as const,
+    "skip",
+  );
+  const existing = await collect(db(c.env), "platform_vault", {
+    columns: [
+      "id",
+      "platform_name",
+      "account_email",
+      "username",
+      "email_source",
+      "updated_at",
+    ],
+    order: [["id", "asc"]],
+  });
+  const identity = (a: Row) =>
+    vaultIdentity({
+      platform_name: String(a.platform_name),
+      account_email: String(a.account_email),
+      username: String(a.username),
+    });
+  const mutations: import("../storage/client").Mutation[] = [];
+  const additions: Row[] = [];
+  const addresses = new Set<string>();
+  let created = 0,
+    updated = 0,
+    skipped = 0;
+  for (const account of entries) {
+    const prior = existing.find((a) => identity(a) === vaultIdentity(account));
+    if (prior && mode === "skip") {
+      skipped++;
+      continue;
+    }
+    if (prior) {
+      mutations.push(
+        {
+          op: "assertExists",
+          table: "platform_vault",
+          where: and(
+            ...Object.entries(prior).map(([key, value]) => eq(key, value)),
+          ),
+          message: "已有账号发生变化，请重新预览",
+        },
+        update("platform_vault", eq("id", prior.id), {
+          ...account,
+          updated_at: now(),
+        }),
+      );
+      if (prior.email_source === "cf_domain")
+        addresses.add(String(prior.account_email));
+      updated++;
+    } else {
+      additions.push(account);
+      created++;
+    }
+    if (account.email_source === "cf_domain")
+      addresses.add(account.account_email);
+  }
+  if (additions.length) {
+    // Check case-insensitive identities inside the serialized transaction. A
+    // concurrent import must never silently duplicate accounts or miscount rows.
+    // Keep each query below D1's 100 bound-parameter limit.
+    for (let offset = 0; offset < additions.length; offset += 25)
+      mutations.unshift({
+        op: "assertAbsent",
+        table: "platform_vault",
+        where: or(
+          ...additions
+            .slice(offset, offset + 25)
+            .map((a) =>
+              and(
+                { field: "platform_name", op: "ieq", value: a.platform_name },
+                eq("account_email", a.account_email),
+                eq("username", a.username),
+              ),
+            ),
+        ),
+        message: "导入期间已有账号发生变化，请重新预览后重试",
+      });
+    mutations.push({ op: "insert", table: "platform_vault", rows: additions });
+  }
+  for (const address of addresses) {
+    const [prefix, domain] = address.split("@");
+    mutations.push(
+      insert(
+        "temp_mailboxes",
+        { address, prefix, domain },
+        { conflict: "ignore" },
+      ),
+      { op: "bindMailbox", address },
+    );
+  }
+  if (mutations.length) await db(c.env).mutate(mutations);
   return c.json({
     success: true,
-    message: `已恢复 ${changes} 条记录，已有记录自动跳过`,
+    created,
+    updated,
+    skipped,
+    duplicate_count: duplicateCount,
+    message: `新增 ${created} 条，更新 ${updated} 条，跳过 ${skipped} 条`,
   });
 });
 app.get("/platforms", async (c) => {
@@ -302,16 +375,67 @@ app.get("/platforms", async (c) => {
     ["name", "count", "attention", "pinned"] as const,
     "name",
   );
-  const groups = summarizePlatforms(inventory).sort(
-    (a, b) =>
-      (sort === "count"
-        ? b.count - a.count
-        : sort === "attention"
-          ? b.attention_count - a.attention_count
-          : sort === "pinned"
-            ? b.pinned_count - a.pinned_count
-            : 0) || a.platform_name.localeCompare(b.platform_name, "zh-CN"),
-  );
+  const summaries = summarizePlatforms(inventory);
+  const catalog = await platformCatalog(c.env);
+  const params = c.req.query();
+  const accountFiltered =
+    ["mailbox", "email_source", "status", "domain", "triage"].some(
+      (key) => params[key],
+    ) || params.has_code === "true";
+  for (const platform of catalog) {
+    if (
+      summaries.some((p) => platformKey(p.platform_name) === platform.name_key)
+    )
+      continue;
+    if (accountFiltered || platform.account_count > 0) continue;
+    if (params.platform && platformKey(params.platform) !== platform.name_key)
+      continue;
+    if (
+      params.category &&
+      platformKey(params.category) !== platformKey(platform.category)
+    )
+      continue;
+    if (
+      params.q &&
+      ![platform.name, platform.remark, platform.category].some((v) =>
+        v.toLowerCase().includes(params.q.toLowerCase()),
+      )
+    )
+      continue;
+    summaries.push({
+      platform_name: platform.name,
+      count: 0,
+      attention_count: 0,
+      unchecked_count: 0,
+      connected_count: 0,
+      pinned_count: 0,
+      sources: [],
+      categories: [platform.category],
+    });
+  }
+  const groups = summaries
+    .map((summary) => {
+      const definition = catalog.find(
+        (p) => p.name_key === platformKey(summary.platform_name),
+      );
+      return {
+        ...summary,
+        platform_name: definition?.name || summary.platform_name,
+        definition,
+      };
+    })
+    .sort(
+      (a, b) =>
+        (sort === "count"
+          ? b.count - a.count
+          : sort === "attention"
+            ? b.attention_count - a.attention_count
+            : sort === "pinned"
+              ? (b.definition?.is_pinned || 0) -
+                  (a.definition?.is_pinned || 0) ||
+                b.pinned_count - a.pinned_count
+              : 0) || a.platform_name.localeCompare(b.platform_name, "zh-CN"),
+    );
   // Keep the legacy array response; pagination is opt-in and counts never truncate.
   const paged =
     c.req.query("page") !== undefined || c.req.query("limit") !== undefined;
@@ -332,11 +456,13 @@ app.get("/platforms", async (c) => {
 });
 app.get("/stats", async (c) => {
   const store = db(c.env);
-  const [total_cf_mails, total_outlook_accounts, rows] = await Promise.all([
-    store.count("cf_inbox_mails"),
-    store.count("accounts"),
-    vaultInventory(c.env),
-  ]);
+  const [total_cf_mails, total_outlook_accounts, rows, catalog] =
+    await Promise.all([
+      store.count("cf_inbox_mails"),
+      store.count("accounts"),
+      vaultInventory(c.env),
+      platformCatalog(c.env),
+    ]);
   const groups = new Map<string, number>();
   for (const row of rows)
     groups.set(
@@ -348,7 +474,7 @@ app.get("/stats", async (c) => {
     data: {
       total_vault_accounts: rows.length,
       active_vault_accounts: rows.filter((r) => r.status === "active").length,
-      total_platforms: summarizePlatforms(rows).length,
+      total_platforms: catalog.length,
       attention_accounts: rows.filter((r) => r.needs_attention).length,
       unchecked_accounts: rows.filter((r) => matchesTriage(r, "unchecked"))
         .length,

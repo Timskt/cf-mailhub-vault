@@ -1,6 +1,6 @@
 # 备份、恢复与迁移边界
 
-本文依据当前 `src/routes/backups.ts`、`src/storage/coordinator.ts`、凭据加密和邮件对象回收实现编写，核对日期为 2026-11-15。
+本文依据当前 `src/routes/backups.ts`、`src/storage/coordinator.ts`、凭据加密和邮件对象回收实现编写，核对日期为 2026-11-16。
 
 当前提供的是**有大小限制的业务便携备份与恢复**。完整灾备还需要数据库原生备份、独立的 R2 文件、加密密钥、Worker 配置以及 Durable Object 协调器控制态。项目目前没有完整控制态的导出/导入接口，不能据此承诺一键跨 Cloudflare 账号恢复整个站点。
 
@@ -9,7 +9,7 @@
 | 方式               | 保存范围                                                         | 恢复前提与限制                                                                 |
 | ------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | 脱敏业务清单       | 白名单中的业务元数据，不含账号密码、令牌、正文等敏感内容         | 用于核对和统计；`restorable: false`，不能恢复                                  |
-| 加密业务便携备份   | 下述 11 张业务表及少量偏好；包括账号凭据、CF 邮件正文与对象引用  | 明文 JSON ≤ 1 MiB，总计 ≤ 1,000 行；目标应用、协调器、密钥和依赖文件须先可用   |
+| 加密业务便携备份   | 下述 12 张业务表及少量偏好；包括平台目录、账号凭据、CF 邮件正文与对象引用  | 明文 JSON ≤ 1 MiB，总计 ≤ 1,000 行；目标应用、协调器、密钥和依赖文件须先可用   |
 | D1 原生 SQL 导出   | 所选 D1 数据库中实际存在的表、行、数据集元数据和迁移记录         | 不包含外部主库、DO 存储、Worker Secrets 或 R2 文件；恢复后须核对活动数据集指针 |
 | 外部数据库原生备份 | MySQL/MongoDB/Redis 中的应用数据、generation 与版本/所有者元数据 | 使用相应数据库的一致性备份与恢复流程；还需要原协调器和密钥配套                 |
 | 应用“同步副本”     | 同步任务完成时的一个校验过的数据集                               | 不是持续复制，不包含 R2 文件或完整 DO 控制态；后续写入需重新同步               |
@@ -22,7 +22,7 @@
 
 ```text
 settings, groups, tags, accounts, account_tags, cf_inbox_mails,
-mail_rules, platform_vault, temp_emails, temp_mailboxes, domains
+mail_rules, platforms, platform_vault, temp_emails, temp_mailboxes, domains
 ```
 
 `settings` 仅包含 `default_prefix`、`mail_retention_days`、`token_refresh_batch`、`default_mail_domain`。Outlook 备份包含账号与刷新令牌，不会下载或备份 Microsoft 服务器上的邮箱内容；令牌的实际有效性仍取决于 Microsoft。
@@ -31,7 +31,18 @@ mail_rules, platform_vault, temp_emails, temp_mailboxes, domains
 
 恢复时，业务表被替换为备份中的内容，**不是逐行合并**；目标当前数据集中的控制记录会复制到新的数据集。保留的推送记录与 OAuth 会话如果引用了备份里不存在或身份不同的账号/分组，恢复会拒绝切换。新 Cloudflare 账号中的新环境不会因此获得旧环境的控制记录。
 
-实现中的格式为 `mailhub-backup` / version `1`，当前 schema version 为 `10`，并校验 schema hash、表哈希、整体哈希、字段、主键、唯一约束和关联。格式不兼容时不会自动迁移旧备份；先在匹配版本的隔离环境验证，再制定升级方案。
+实现中的格式为 `mailhub-backup` / version `1`，当前 schema version 为 `11`。新增的 `platforms` 保存独立平台目录，包括空平台、名称、官网、分类、备注、置顶和创建/更新时间；恢复时目录与账号一起替换。普通账号的文本、CSV 或 `/api/vault/export` JSON 不包含空平台目录，不能代替完整业务备份。
+
+### schema 10 兼容
+
+支持已发布的 schema `10`（11 表）备份，处理顺序是：
+
+1. 依据冻结的 schema 10 字段/主键投影核对原 `schema_hash`，要求原 11 张表及清单键完整且精确，不接受夹带 `platforms` 或任意新字段。
+2. 验证原逐表/整体哈希、类型、主键、唯一约束、允许的偏好及账号/邮箱关联。含凭据的明文即使有效也不能通过 HTTP 恢复；旧脱敏明文仅供预览。
+3. 通过后在内存中根据 `platform_vault` 生成平台目录：按账号 ID 排序，平台名去除两端空格并不区分大小写。首条账号提供显示名、安全 HTTP(S) 官网、分类和时间；平台备注为空、置顶为 0。全部账号原字段原样保留，包括各自的官网、分类、备注、置顶和大小写变体；非法历史官网保留在账号原字段上，不提升为平台链接。
+4. 重新生成 schema 11 清单、计数和哈希，并重新验证完整文档。预览的 `table_counts`、`backup_hash` 对应转换后内容；恢复仍提交原上传文件。转换不读取当前时间或目标目录，因此重复预览、确认恢复的摘要一致。
+
+旧文件没有独立的空平台记录，无法凭空恢复这些记录。目标原有平台目录不会被混入旧文件的恢复结果。新增派生平台也占用 1,000 行/1 MiB 容量，超过后返回 `BACKUP_TOO_LARGE`，不会静默丢弃平台。未知未来版本、其他旧版本、原始哈希不匹配及手工只改版本号的文件都会拒绝；需要在相应版本的隔离环境另行迁移。
 
 ### 容量与加密
 
@@ -77,7 +88,7 @@ mail_rules, platform_vault, temp_emails, temp_mailboxes, domains
 | 相同请求和幂等 Key 重试      | 返回同一恢复结果，`Idempotency-Replayed: true` |
 | 明文文档增加 1 字节          | 1,048,577 字节被拒绝，`BACKUP_TOO_LARGE` / 413 |
 
-该边界文档由测试夹具构造，导出预留空间意味着它不一定能再次通过常规导出；实际备份应留有增长空间。既有自动化用例另覆盖真实 workerd/SQLite DO 的加密恢复、DO 驱逐后的重放、错误口令/篡改、保留控制引用冲突、对象缺失和恢复与 GC 的竞态：
+该边界文档由测试夹具构造，导出预留空间意味着它不一定能再次通过常规导出；实际备份应留有增长空间。自动化用例还覆盖 schema 11 完整平台元数据/空平台恢复、schema 10 加密恢复和脱敏预览兼容、原哈希/字段篡改拒绝，以及真实 workerd/SQLite DO 的加密恢复、DO 驱逐后的重放、错误口令/篡改、保留控制引用冲突、对象缺失和恢复与 GC 的竞态：
 
 ```bash
 pnpm exec tsx --test --test-concurrency=1 tests/backup-restore.test.ts tests/mail-objects.test.ts tests/webhooks.test.ts

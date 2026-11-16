@@ -251,6 +251,21 @@ export const schema = {
     metadata: "{}",
     created_at: stamp,
   }),
+  // Append new tables: persisted migration jobs address tables by index.
+  platforms: {
+    key: ["name_key"],
+    auto: false,
+    fields: {
+      name_key: "",
+      name: "",
+      url: "",
+      category: "其他",
+      remark: "",
+      is_pinned: 0,
+      ...stamps,
+    },
+    unique: [],
+  },
 } satisfies Record<
   string,
   { key: string[]; auto: boolean; fields: Row; unique: string[][] }
@@ -471,11 +486,24 @@ export interface DataPort {
 }
 export type Mutation =
   | {
+      op: "platform";
+      action: "create" | "update" | "merge" | "delete";
+      source: string;
+      definition?: Row;
+      target?: string;
+    }
+  | {
       op: "assertExists";
       table: Table;
       where: Filter;
       message?: string;
       minimum?: number;
+    }
+  | {
+      op: "assertAbsent";
+      table: Table;
+      where: Filter;
+      message?: string;
     }
   | { op: "bindMailbox"; address: string }
   | { op: "confirmMailObject"; key: string }

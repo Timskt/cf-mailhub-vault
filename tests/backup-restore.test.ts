@@ -8,6 +8,7 @@ import backups, {
   sealBackup,
   validateBackup,
   type BackupDocument,
+  type LegacyBackupDocument,
 } from "../src/routes/backups";
 import { createSessionToken, getSessionSecret } from "../src/auth";
 import { db } from "../src/storage/client";
@@ -50,6 +51,7 @@ async function setup() {
     "account_tags",
     "cf_inbox_mails",
     "mail_rules",
+    "platforms",
     "platform_vault",
     "temp_emails",
     "temp_mailboxes",
@@ -57,6 +59,23 @@ async function setup() {
   ] as const;
   const tables = Object.fromEntries(business.map((t) => [t, [] as Row[]]));
   tables.groups = [{ ...defaults("groups"), id: 1, name: "Restored" }];
+  tables.platforms = [
+    {
+      ...defaults("platforms"),
+      name_key: "recovered",
+      name: "Recovered",
+      url: "https://example.test/",
+      category: "服务",
+      remark: "平台级备注",
+      is_pinned: 1,
+    },
+    {
+      ...defaults("platforms"),
+      name_key: "empty",
+      name: "Empty",
+      remark: "暂无账号",
+    },
+  ];
   tables.platform_vault = [
     {
       ...defaults("platform_vault"),
@@ -121,6 +140,12 @@ test("restore uses isolated D1, preserves control records, counters and exactly-
     assert.equal(
       (await f.coordinator.find("platform_vault"))[0].platform_name,
       "Recovered",
+    );
+    assert.deepEqual(
+      await f.coordinator.find("platforms", { order: [["name_key", "asc"]] }),
+      [...f.tables.platforms].sort((a, b) =>
+        String(a.name_key).localeCompare(String(b.name_key)),
+      ),
     );
     assert.equal(
       (
@@ -440,6 +465,23 @@ async function httpFixture() {
       refresh_token: "refresh-plaintext",
       password: "outlook-plaintext",
     }),
+    insert(
+      "platforms",
+      {
+        name_key: "saved",
+        name: "Saved",
+        url: "https://example.test/platform",
+        category: "开发工具",
+        remark: "平台级说明",
+        is_pinned: 1,
+      },
+      { conflict: "update" },
+    ),
+    insert("platforms", {
+      name_key: "empty",
+      name: "Empty",
+      remark: "尚无账号的平台",
+    }),
     insert("webhooks", {
       name: "Current",
       url: "https://example.test/hook",
@@ -453,7 +495,8 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
   const f = await httpFixture();
   try {
     const manifest = await f.request("/manifest");
-    assert.equal(manifest.data.data.schema_version, 10);
+    assert.equal(manifest.data.data.schema_version, 11);
+    assert.equal(manifest.data.data.tables.length, 12);
     assert.equal(manifest.data.data.restore_available, true);
     const backup = await f.exportFile();
     const document = await openBackup(backup, PASSPHRASE);
@@ -467,6 +510,11 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
         password: "current-plaintext",
         platform_name: "Current",
       }),
+      update("platforms", eq("name_key", "saved"), {
+        remark: "更新后的说明",
+        is_pinned: 0,
+      }),
+      remove("platforms", eq("name_key", "empty")),
     ]);
     const controlBefore = (await f.coordinator.find("webhooks"))[0];
     const preview = await f.request("/preview", {
@@ -502,6 +550,18 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
       (await db(f.env).first("accounts", eq("id", 1)))?.refresh_token,
       "refresh-plaintext",
     );
+    assert.deepEqual(
+      await db(f.env).select("platforms", { order: [["name_key", "asc"]] }),
+      document.tables.platforms,
+    );
+    assert.equal(document.tables.platforms.length, 2);
+    assert.equal(document.tables.platforms[0].name, "Empty");
+    assert.equal(document.tables.platforms[1].remark, "平台级说明");
+    assert.equal(document.tables.platforms[1].is_pinned, 1);
+    assert.equal(
+      document.tables.platforms[1].url,
+      "https://example.test/platform",
+    );
     assert.deepEqual((await f.coordinator.find("webhooks"))[0], controlBefore);
     assert.ok(
       (await f.coordinator.find("idempotency_requests")).some(
@@ -529,16 +589,201 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
   }
 });
 
-async function rehash(document: BackupDocument) {
-  for (const table of BACKUP_TABLES) {
-    document.manifest.table_counts[table] = document.tables[table].length;
-    document.manifest.table_hashes[table] = await digest(
-      document.tables[table],
-    );
+async function rehash<T extends BackupDocument | LegacyBackupDocument>(
+  document: T,
+): Promise<T> {
+  for (const [table, rows] of Object.entries(document.tables)) {
+    document.manifest.table_counts[table] = rows.length;
+    document.manifest.table_hashes[table] = await digest(rows);
   }
   document.manifest.data_hash = await digest(document.tables);
   return document;
 }
+
+// Captured from the released schema 10 exporter, independent of the current model.
+const SCHEMA_10_HASH =
+  "1d98b24a791a91074f2772ae9f11d3c94ee4b3b12f611d0a5f3be69166c2e846";
+async function legacyBackup(
+  document: BackupDocument,
+): Promise<LegacyBackupDocument> {
+  const copy = structuredClone(document);
+  const { platforms: _platforms, ...tables } = copy.tables;
+  delete copy.manifest.table_counts.platforms;
+  delete copy.manifest.table_hashes.platforms;
+  return rehash({
+    manifest: {
+      ...copy.manifest,
+      schema_version: 10,
+      schema_hash: SCHEMA_10_HASH,
+    },
+    tables,
+  });
+}
+
+test("schema 10 encrypted backups validate the released schema before deterministic upgrade and preserve account-derived platforms on restore", async () => {
+  const f = await httpFixture();
+  try {
+    await db(f.env).mutate([
+      update("platform_vault", eq("id", 1), {
+        platform_url: "https://example.test/legacy",
+        category: "历史分类",
+        remark: "账号备注保留在账号上",
+      }),
+      insert("platform_vault", {
+        platform_name: "SAVED",
+        platform_url: "https://example.test/second",
+        account_email: "duplicate@example.test",
+        email_source: "external",
+        password: "other-account-secret",
+      }),
+    ]);
+    const legacy = await legacyBackup(
+      await openBackup(await f.exportFile(), PASSPHRASE),
+    );
+    const original = structuredClone(legacy);
+    const converted = await validateBackup(legacy);
+    assert.deepEqual(
+      legacy,
+      original,
+      "conversion must not rewrite the uploaded document",
+    );
+    assert.equal(converted.manifest.schema_version, 11);
+    assert.equal(Object.keys(converted.tables).length, 12);
+    assert.deepEqual(
+      converted.tables.platform_vault,
+      legacy.tables.platform_vault,
+    );
+    assert.deepEqual(converted.tables.platforms, [
+      {
+        name_key: "saved",
+        name: "Saved",
+        url: "https://example.test/legacy",
+        category: "历史分类",
+        remark: "",
+        is_pinned: 0,
+        created_at: legacy.tables.platform_vault[0].created_at,
+        updated_at: legacy.tables.platform_vault[0].updated_at,
+      },
+    ]);
+    const backup = await sealBackup(legacy, PASSPHRASE);
+    assert.deepEqual(await openBackup(backup, PASSPHRASE), converted);
+    assert.deepEqual(await validateBackup(legacy), converted);
+    const preview = await f.request("/preview", {
+      backup,
+      passphrase: PASSPHRASE,
+    });
+    assert.equal(preview.response.status, 200, JSON.stringify(preview.data));
+    assert.equal(preview.data.data.table_counts.platforms, 1);
+    assert.equal(preview.data.data.backup_hash, await digest(converted));
+    const restored = await f.request(
+      "/restore",
+      {
+        backup,
+        passphrase: PASSPHRASE,
+        confirmation_token: preview.data.data.confirmation_token,
+        confirm: "RESTORE_BACKUP",
+      },
+      "restore-schema-10",
+    );
+    assert.equal(restored.response.status, 200, JSON.stringify(restored.data));
+    assert.deepEqual(
+      await db(f.env).select("platforms"),
+      converted.tables.platforms,
+    );
+    assert.deepEqual(
+      await db(f.env).select("platform_vault", { order: [["id", "asc"]] }),
+      legacy.tables.platform_vault,
+    );
+    assert.equal(
+      await db(f.env).count("platforms", eq("name_key", "empty")),
+      0,
+      "the destination's unrelated catalog is replaced, not merged",
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("schema 10 redacted plaintext remains preview-only and upgrades without introducing hidden account metadata", async () => {
+  const f = await httpFixture();
+  try {
+    const legacy = await legacyBackup((await f.request("/export")).data);
+    const converted = await validateBackup(legacy);
+    assert.equal(converted.manifest.redacted, true);
+    assert.equal(converted.manifest.restorable, false);
+    assert.equal(converted.tables.platforms.length, 1);
+    assert.ok(!("url" in converted.tables.platforms[0]));
+    assert.ok(!("remark" in converted.tables.platforms[0]));
+    const preview = await f.request("/preview", { backup: legacy });
+    assert.equal(preview.response.status, 200, JSON.stringify(preview.data));
+    assert.equal(preview.data.data.restorable, false);
+    assert.equal(preview.data.data.table_counts.platforms, 1);
+    assert.equal(preview.data.data.confirmation_token, undefined);
+    const unredacted = await legacyBackup(
+      await openBackup(await f.exportFile(), PASSPHRASE),
+    );
+    assert.equal(
+      (await f.request("/preview", { backup: unredacted })).response.status,
+      400,
+    );
+    assert.equal((await f.coordinator.status()).active.generation, "legacy");
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("schema 10 cannot smuggle schema 11 tables or new fields and rejects original hash tampering before conversion", async () => {
+  const f = await httpFixture();
+  try {
+    const current = await openBackup(await f.exportFile(), PASSPHRASE);
+    const legacy = await legacyBackup(current);
+    for (const change of [
+      (d: LegacyBackupDocument) => {
+        d.manifest.schema_hash = current.manifest.schema_hash;
+      },
+      (d: LegacyBackupDocument) => {
+        d.manifest.schema_version = 12 as 10;
+      },
+      (d: LegacyBackupDocument) => {
+        (d.tables as any).platforms = current.tables.platforms;
+      },
+      (d: LegacyBackupDocument) => {
+        d.tables.platform_vault[0].managed = 1;
+      },
+      (d: LegacyBackupDocument) => {
+        d.tables.accounts[0].refresh_token_fingerprint = "not-a-legacy-field";
+      },
+      (d: LegacyBackupDocument) => {
+        d.tables.accounts[0].group_id = 999;
+      },
+      (d: LegacyBackupDocument) => {
+        d.tables.platform_vault[0].password = 123;
+      },
+    ]) {
+      const altered = structuredClone(legacy);
+      change(altered);
+      await rehash(altered);
+      await assert.rejects(validateBackup(altered));
+      await assert.rejects(
+        openBackup(await sealBackup(altered, PASSPHRASE), PASSPHRASE),
+      );
+    }
+    const changed = structuredClone(legacy);
+    changed.tables.platform_vault[0].platform_name = "Tampered";
+    await assert.rejects(validateBackup(changed), /哈希/);
+    changed.manifest.table_hashes.platform_vault = await digest(
+      changed.tables.platform_vault,
+    );
+    await assert.rejects(validateBackup(changed), /整体哈希/);
+    const disguised = structuredClone(current);
+    disguised.manifest.schema_version = 10 as 11;
+    disguised.manifest.schema_hash = SCHEMA_10_HASH;
+    await assert.rejects(validateBackup(disguised));
+    assert.equal((await f.coordinator.status()).active.generation, "legacy");
+  } finally {
+    await f.dispose();
+  }
+});
 
 test("backup validation rejects authenticated schema, type, reference, uniqueness, hash and control injection attacks", async () => {
   const f = await httpFixture();
@@ -559,7 +804,7 @@ test("backup validation rejects authenticated schema, type, reference, uniquenes
     await assert.rejects(openBackup(backup, "wrong-passphrase-1234"));
     for (const change of [
       (d: BackupDocument) => {
-        d.manifest.schema_version = 7 as 10;
+        d.manifest.schema_version = 7 as 11;
       },
       (d: BackupDocument) => {
         d.tables.accounts[0].id = "1";
@@ -586,6 +831,18 @@ test("backup validation rejects authenticated schema, type, reference, uniquenes
       },
       (d: BackupDocument) => {
         d.tables.platform_vault[0].extra = "unknown";
+      },
+      (d: BackupDocument) => {
+        d.tables.platforms[0].name_key = "wrong-name";
+      },
+      (d: BackupDocument) => {
+        d.tables.platforms[0].is_pinned = 2;
+      },
+      (d: BackupDocument) => {
+        d.tables.platforms[0].url = "javascript:alert(1)";
+      },
+      (d: BackupDocument) => {
+        d.tables.platforms.push({ ...d.tables.platforms[0] });
       },
       (d: BackupDocument) => {
         (d.tables as any).api_keys = [];
@@ -927,12 +1184,20 @@ test(
         email_source: "external",
         password: "runtime-vault-original",
       });
+      await request("/api/platforms", {
+        name: "Runtime empty",
+        url: "https://example.test/",
+        category: "空平台",
+        remark: "preserved",
+        is_pinned: true,
+      });
       const exported = await request("/api/backups/export", {
         include_credentials: true,
         confirm: "EXPORT_CREDENTIALS",
         passphrase: PASSPHRASE,
       });
       await request("/api/vault/1", { password: "runtime-vault-newer" }, "PUT");
+      await request("/api/platforms/Runtime%20empty", undefined, "DELETE");
       const preview = await request("/api/backups/preview", {
         backup: exported.data,
         passphrase: PASSPHRASE,
@@ -953,6 +1218,15 @@ test(
         (await request("/api/vault/1")).data.data.password,
         "runtime-vault-original",
       );
+      const restoredPlatforms = (await request("/api/platforms")).data.data;
+      assert.equal(restoredPlatforms.length, 2);
+      const empty = restoredPlatforms.find(
+        (p: any) => p.name_key === "runtime empty",
+      );
+      assert.equal(empty.account_count, 0);
+      assert.equal(empty.managed, true);
+      assert.equal(empty.is_pinned, 1);
+      assert.equal(empty.remark, "preserved");
       const stored = await DB.prepare(
         "SELECT body FROM storage_rows WHERE generation = ? AND table_name = 'platform_vault'",
       )

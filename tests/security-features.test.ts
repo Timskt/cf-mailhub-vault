@@ -236,6 +236,55 @@ test("key inputs and resource restrictions fail closed", async () => {
   );
 });
 
+test("platform management and raw transfer endpoints do not broaden scoped API grants", async () => {
+  const restricted = await issue(["admin"], { platforms: ["Allowed"] });
+  const writer = await issue(["vault:write"]);
+  for (const [path, body, method] of [
+    ["/api/platforms", undefined, "GET"],
+    ["/api/platforms", { name: "Unauthorized" }, "POST"],
+    ["/api/platforms/Allowed", { name: "Renamed" }, "PUT"],
+    ["/api/platforms/Allowed/merge", { target: "Other" }, "POST"],
+    ["/api/platforms/Allowed", undefined, "DELETE"],
+  ] as const) {
+    for (const key of [restricted.key, writer.key])
+      assert.equal(
+        (await request(path, body, { key, method })).response.status,
+        403,
+        path,
+      );
+  }
+  for (const path of ["/api/vault/import-preview", "/api/vault/import"])
+    assert.equal(
+      (
+        await request(
+          path,
+          { raw_text: "Other----outside@example.test----secret" },
+          { key: restricted.key },
+        )
+      ).response.status,
+      403,
+    );
+  for (const path of ["/api/vault/export", "/api/outlook/accounts/export"])
+    assert.equal(
+      (await request(path, undefined, { key: restricted.key })).response.status,
+      403,
+    );
+  assert.equal(
+    (
+      await request(
+        "/api/vault/import-preview",
+        { raw_text: "Preview----demo@example.test----secret" },
+        { key: writer.key },
+      )
+    ).response.status,
+    200,
+  );
+  assert.equal(
+    await db(fixture.env).count("platforms", eq("name_key", "unauthorized")),
+    0,
+  );
+});
+
 test("verify scope cannot read credentials or mail bodies; indirect lookups enforce the resolved email and platform", async () => {
   const key = await issue(["verify:read"], {
     emails: ["allowed@example.test"],

@@ -1,4 +1,5 @@
 import { email, invalid, object, text } from "./validation";
+import { parseDelimited } from "../shared/account-text";
 export const DEFAULT_MICROSOFT_CLIENT_ID =
   "9e5f94bc-e8a4-4e73-b8be-63364c29d753";
 export const UUID_REGEX =
@@ -165,12 +166,47 @@ export function parseImport(raw: unknown): {
     if (!Array.isArray(parsed)) invalid("accounts 必须是 JSON 数组");
     input = parsed.map((value, index) => ({ value, line: index + 1 }));
   } else {
-    input = content
-      .split(/\r?\n/)
-      .map((value, i) => ({ value: value.trim(), line: i + 1 }))
-      .filter(
-        (r) => r.value && !r.value.startsWith("#") && !r.value.startsWith("//"),
+    const firstLine =
+      content
+        .split(/\r?\n/)
+        .find((line) => line.trim() && !/^\s*(#|\/\/)/.test(line)) || "";
+    const declared = parseHeader(firstLine.trim());
+    if (declared) {
+      // Own text/CSV exports use a header and RFC-style quoted fields. Parse
+      // complete records so embedded newlines never split a password or note.
+      const normalized = content.replace(
+        /^导出内容\s*[（(]\s*格式\s*[：:]\s*(.*?)\s*[）)]\s*$/m,
+        "$1",
       );
+      let records;
+      try {
+        records = parseDelimited(normalized, declared.delimiter);
+      } catch {
+        return invalid("导入内容的引号未闭合或字段格式无效，请核对文本规则");
+      }
+      input = records
+        .filter(
+          (r) =>
+            r.values.some((v) => v.trim()) && !/^\s*(#|\/\/)/.test(r.values[0]),
+        )
+        .slice(1)
+        .map((r) => ({
+          line: r.line,
+          value:
+            r.values.length !== declared.names.length
+              ? { __format_error: "字段数量与表头不一致，请保留空字段分隔符" }
+              : Object.fromEntries(
+                  declared.names.map((name, i) => [name, r.values[i]]),
+                ),
+        }));
+    } else
+      input = content
+        .split(/\r?\n/)
+        .map((value, i) => ({ value: value.trim(), line: i + 1 }))
+        .filter(
+          (r) =>
+            r.value && !r.value.startsWith("#") && !r.value.startsWith("//"),
+        );
   }
   let headers: string[] | undefined;
   let headerDelimiter = ",";
@@ -197,7 +233,11 @@ export function parseImport(raw: unknown): {
             ),
           );
         } else account = parseLine(item.value);
-      } else account = validateAccount(item.value);
+      } else {
+        if (object(item.value).__format_error)
+          invalid("字段数量与表头不一致，请保留空字段分隔符");
+        account = validateAccount(item.value);
+      }
       const duplicate = unique.has(account.email);
       unique.set(account.email, account);
       rows.push({

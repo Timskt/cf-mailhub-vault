@@ -278,7 +278,7 @@ export class SecureStore implements DataStore {
             ...mutation,
             where: await this.filter(mutation.table, mutation.where),
           };
-        if (mutation.op === "assertExists")
+        if (mutation.op === "assertExists" || mutation.op === "assertAbsent")
           return {
             ...mutation,
             where: (await this.filter(mutation.table, mutation.where))!,

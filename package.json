@@ -17,7 +17,7 @@
     "build": "pnpm build:web && wrangler deploy --dry-run --config wrangler.local.jsonc --outdir dist --minify",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.connector.json",
     "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "pnpm build:web && playwright test",
     "test:sdk:python": "python3 -m unittest discover -s tests -p 'sdk_python_test.py'",
     "typecheck:sdk": "tsc --noEmit -p sdk/typescript/tsconfig.json",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.local.jsonc",

@@ -270,7 +270,9 @@ function policy(method: string, path: string): Policy | null {
       };
   }
   if (
-    /^\/api\/vault(?:\/(?:platforms|stats|export|import|batch))?$/.test(path) &&
+    /^\/api\/vault(?:\/(?:platforms|stats|export|import|import-preview|batch))?$/.test(
+      path,
+    ) &&
     (read || method === "POST")
   )
     return {
@@ -336,6 +338,7 @@ function policy(method: string, path: string): Policy | null {
       path,
     ) ||
     /^\/api\/settings(?:\/domains(?:\/[^/]+(?:\/check)?)?)?$/.test(path) ||
+    /^\/api\/platforms(?:\/[^/]+(?:\/merge)?)?$/.test(path) ||
     path === "/api/search"
   )
     return { scopes: ["admin"], collection: true };

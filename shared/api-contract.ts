@@ -30,7 +30,7 @@ export type ApiOperation = {
 };
 export type ApiGrant =
   "verify:read" | "mailbox:write" | "vault:read" | "vault:write" | "admin";
-export const API_VERSION = "2.2.0";
+export const API_VERSION = "2.3.0";
 export const s = (maxLength?: number): Schema => ({
   type: "string",
   ...(maxLength ? { maxLength } : {}),
@@ -152,6 +152,26 @@ const vaultInput = {
   category: s(100),
   proxy_node: s(300),
   remark: s(4000),
+};
+const platformInput = {
+  name: { ...s(100), minLength: 1 },
+  url: {
+    ...s(2048),
+    description: "空字符串或不含用户名/密码的 HTTP(S) 网址。",
+  },
+  category: s(100),
+  remark: s(4000),
+  is_pinned: bool,
+};
+const vaultRawText = {
+  ...s(1048576),
+  minLength: 1,
+  description:
+    "UTF-8 最多 1 MiB、1–200 条账号；支持带表头文本/CSV、固定顺序 ---- 文本及 JSON。包含分隔符、引号或换行的字段用双引号包裹，内部引号写成两个引号。",
+};
+const vaultTextExample = {
+  raw_text:
+    "platform_name----account_email----password----email_source\nExample----user@example.com----Example-password-42----external",
 };
 const mailboxFields = {
   id,
@@ -299,16 +319,84 @@ const backupTables = [
   "account_tags",
   "cf_inbox_mails",
   "mail_rules",
+  "platforms",
   "platform_vault",
   "temp_emails",
   "temp_mailboxes",
   "domains",
 ];
-const backupCounts = obj(
-  Object.fromEntries(backupTables.map((table) => [table, n(0, 1000)])),
-  backupTables,
-  false,
+const legacyBackupTables = backupTables.filter(
+  (table) => table !== "platforms",
 );
+const countsFor = (tables: string[]) =>
+  obj(
+    Object.fromEntries(tables.map((table) => [table, n(0, 1000)])),
+    tables,
+    false,
+  );
+const backupCounts = countsFor(backupTables);
+const backupManifest = (version: 10 | 11, tables: string[]) =>
+  obj(
+    {
+      format: { type: "string", const: "mailhub-backup" },
+      version: { type: "integer", const: 1 },
+      schema_version: { type: "integer", const: version },
+      schema_hash: hash,
+      created_at: isoTime,
+      redacted: bool,
+      restorable: bool,
+      consistency: { type: "string", const: "revision_checked" },
+      table_counts: countsFor(tables),
+      table_hashes: obj(
+        Object.fromEntries(tables.map((table) => [table, hash])),
+        tables,
+        false,
+      ),
+      data_hash: hash,
+      excluded: arr(s()),
+      external_dependencies: arr(s()),
+    },
+    [
+      "format",
+      "version",
+      "schema_version",
+      "schema_hash",
+      "created_at",
+      "redacted",
+      "restorable",
+      "consistency",
+      "table_counts",
+      "table_hashes",
+      "data_hash",
+      "excluded",
+      "external_dependencies",
+    ],
+    false,
+  );
+const backupDocument = (manifest: string, tables: string[]) =>
+  obj(
+    {
+      manifest: ref(manifest),
+      tables: obj(
+        Object.fromEntries(
+          tables.map((table) => [
+            table,
+            arr(
+              {
+                type: "object",
+                additionalProperties: { type: ["string", "number", "null"] },
+              },
+              1000,
+            ),
+          ]),
+        ),
+        tables,
+        false,
+      ),
+    },
+    ["manifest", "tables"],
+    false,
+  );
 const dataset = obj({ sourceId: s(), generation: s() }, [
   "sourceId",
   "generation",
@@ -457,6 +545,54 @@ export const schemas: Record<string, Schema> = {
     ["results", "summary", "completed_at"],
   ),
   VaultInput: obj(vaultInput, ["platform_name", "account_email"]),
+  VaultImport: {
+    ...obj({
+      accounts: { ...arr(ref("VaultInput"), 200), minItems: 1 },
+      raw_text: vaultRawText,
+      platform_name: s(100),
+      duplicate_mode: { ...strEnum("skip", "update"), default: "skip" },
+    }),
+    oneOf: [
+      { required: ["accounts"], not: { required: ["raw_text"] } },
+      { required: ["raw_text"], not: { required: ["accounts"] } },
+    ],
+  },
+  VaultImportPreview: obj(
+    {
+      success: { type: "boolean", const: true },
+      valid_count: n(0, 200),
+      error_count: n(0, 200),
+      duplicate_count: n(0, 200),
+      rows: arr(
+        obj(
+          {
+            line: n(1),
+            platform_name: s(100),
+            account_email: address,
+            username: s(254),
+            duplicate: bool,
+            error: s(),
+          },
+          ["line"],
+          false,
+        ),
+        200,
+      ),
+    },
+    ["success", "valid_count", "error_count", "duplicate_count", "rows"],
+    false,
+  ),
+  VaultImportResult: obj(
+    {
+      success: { type: "boolean", const: true },
+      message: s(),
+      created: n(0, 200),
+      updated: n(0, 200),
+      skipped: n(0, 200),
+      duplicate_count: n(0, 200),
+    },
+    ["success", "message", "created", "updated", "skipped", "duplicate_count"],
+  ),
   Vault: obj(
     {
       ...vaultInput,
@@ -509,8 +645,36 @@ export const schemas: Record<string, Schema> = {
       sources: arr(sources),
       categories: arr(s()),
       updated_at: date,
+      definition: ref("PlatformDefinition"),
     },
     ["platform_name", "count", "attention_count"],
+  ),
+  PlatformInput: obj(platformInput, ["name"]),
+  PlatformDefinition: obj(
+    {
+      ...platformInput,
+      name_key: s(100),
+      is_pinned: flag,
+      ...timestamps,
+      account_count: n(),
+      managed: {
+        ...bool,
+        description:
+          "true 表示已保存到独立目录；false 是旧账号名推导出的待接管平台。",
+      },
+    },
+    [
+      "name_key",
+      "name",
+      "url",
+      "category",
+      "remark",
+      "is_pinned",
+      "created_at",
+      "updated_at",
+      "account_count",
+      "managed",
+    ],
   ),
   Mailbox: obj(
     {
@@ -922,66 +1086,14 @@ export const schemas: Record<string, Schema> = {
     ["id", "event", "created_at", "data"],
     false,
   ),
-  BackupManifest: obj(
-    {
-      format: { type: "string", const: "mailhub-backup" },
-      version: { type: "integer", const: 1 },
-      schema_version: { type: "integer", const: 10 },
-      schema_hash: hash,
-      created_at: isoTime,
-      redacted: bool,
-      restorable: bool,
-      consistency: { type: "string", const: "revision_checked" },
-      table_counts: backupCounts,
-      table_hashes: obj(
-        Object.fromEntries(backupTables.map((table) => [table, hash])),
-        backupTables,
-        false,
-      ),
-      data_hash: hash,
-      excluded: arr(s()),
-      external_dependencies: arr(s()),
-    },
-    [
-      "format",
-      "version",
-      "schema_version",
-      "schema_hash",
-      "created_at",
-      "redacted",
-      "restorable",
-      "consistency",
-      "table_counts",
-      "table_hashes",
-      "data_hash",
-      "excluded",
-      "external_dependencies",
-    ],
-    false,
-  ),
-  BackupDocument: obj(
-    {
-      manifest: ref("BackupManifest"),
-      tables: obj(
-        Object.fromEntries(
-          backupTables.map((table) => [
-            table,
-            arr(
-              {
-                type: "object",
-                additionalProperties: { type: ["string", "number", "null"] },
-              },
-              1000,
-            ),
-          ]),
-        ),
-        backupTables,
-        false,
-      ),
-    },
-    ["manifest", "tables"],
-    false,
-  ),
+  BackupManifest: backupManifest(11, backupTables),
+  BackupDocument: backupDocument("BackupManifest", backupTables),
+  LegacyBackupManifest: backupManifest(10, legacyBackupTables),
+  LegacyBackupDocument: {
+    ...backupDocument("LegacyBackupManifest", legacyBackupTables),
+    description:
+      "仅兼容已发布的 schema 10：先严格校验原始 schema hash、字段及内容，再在内存中补出 platforms 并转为 schema 11。明文仅限脱敏预览。",
+  },
   EncryptedBackup: obj(
     {
       format: { type: "string", const: "mailhub-backup-encrypted" },
@@ -1011,7 +1123,7 @@ export const schemas: Record<string, Schema> = {
     {
       format: { type: "string", const: "mailhub-backup" },
       version: { type: "integer", const: 1 },
-      schema_version: { type: "integer", const: 10 },
+      schema_version: { type: "integer", const: 11 },
       name: { type: "string", const: "便携业务备份" },
       limits: obj(
         {
@@ -1386,6 +1498,93 @@ op(
       "先验证全部字段，再一次提交邮箱及账号；绑定邮箱永久保留。可指定 prefix；冲突时不新增任何记录。支持持久化 Idempotency-Key；网络超时后使用相同键及相同请求核对，若结果未知则查询台账，不得换键自动重执。需要 mailbox:write 和 vault:write 两项权限。",
   },
 );
+op(
+  "get",
+  "/api/platforms",
+  "listPlatformDefinitions",
+  "查看独立平台目录",
+  "平台管理",
+  {
+    response: obj(
+      {
+        success: { type: "boolean", const: true },
+        data: arr(ref("PlatformDefinition")),
+        total: n(),
+      },
+      ["success", "data", "total"],
+    ),
+    description:
+      "返回含空平台的完整目录及账号数量。managed=false 表示从旧账号名推导、尚未接管的记录；可通过编辑保存。需要 admin grant 或管理员会话，不接受附带邮箱/平台资源限制的 Key。",
+  },
+);
+op(
+  "post",
+  "/api/platforms",
+  "createPlatformDefinition",
+  "创建平台，可暂不添加账号",
+  "平台管理",
+  {
+    body: ref("PlatformInput"),
+    example: {
+      name: "Example",
+      url: "https://example.com/",
+      category: "开发服务",
+      remark: "平台级说明",
+      is_pinned: true,
+    },
+    response: success(ref("PlatformDefinition")),
+    description:
+      "创建独立平台目录，不分配邮箱。名称去除两端空格后不区分大小写；已有目录或旧账号使用相同名称时 409 CONFLICT。仅 admin grant 或管理员会话，资源受限 Key 不可用。",
+  },
+);
+op(
+  "put",
+  "/api/platforms/{name}",
+  "updatePlatformDefinition",
+  "编辑或重命名平台",
+  "平台管理",
+  {
+    body: obj(platformInput),
+    example: {
+      name: "Example renamed",
+      url: "https://example.com/",
+      category: "开发服务",
+      remark: "已更新的平台说明",
+      is_pinned: false,
+    },
+    response: success(ref("PlatformDefinition")),
+    effects: "保存完整平台定义；重命名原子更新全部关联账号与邮箱的平台名称。",
+    description:
+      "name 路径段须 URL 编码。正文 name 省略时沿用路径名称；其余省略字段恢复默认值（url/remark 为空、category=其他、is_pinned=false），请提交希望保留的完整元数据。撞名返回 409 CONFLICT，须由使用者选择显式 merge；不隐式合并。仅 admin grant 或管理员会话，资源受限 Key 不可用。",
+  },
+);
+op(
+  "post",
+  "/api/platforms/{name}/merge",
+  "mergePlatformDefinitions",
+  "将平台合并到已有目标",
+  "平台管理",
+  {
+    body: obj({ target: { ...s(100), minLength: 1 } }, ["target"]),
+    example: { target: "Example" },
+    response: success(ref("PlatformDefinition")),
+    effects:
+      "源平台全部账号及邮箱关联移至目标；移除源目录，保留目标元数据及所有账号。",
+    description:
+      "目标必须已存在（目录或旧账号可推导平台），否则 404；源与目标同名（不区分大小写）返回 400。逻辑重复账号也全部保留，不覆盖密码或删除账号。仅 admin grant 或管理员会话，资源受限 Key 不可用。",
+  },
+);
+op(
+  "delete",
+  "/api/platforms/{name}",
+  "deletePlatformDefinition",
+  "删除没有账号的平台",
+  "平台管理",
+  {
+    description:
+      "平台仍被账号引用时原子拒绝并返回 409 REFERENCE_EXISTS，请先迁移账号或明确合并到其他平台。仅 admin grant 或管理员会话，资源受限 Key 不可用。",
+  },
+);
 op("get", "/api/vault", "listVaultAccounts", "分页筛选平台账号", "平台账号", {
   parameters: [...pages, ...filters],
   response: paged(ref("VaultSummary")),
@@ -1458,10 +1657,12 @@ op(
       ["success", "data", "total", "summary"],
     ),
     description:
-      "只有传 page 或 limit 时分页；未传则返回全部分组。统计基于当前筛选。",
+      "只有传 page 或 limit 时分页；未传则返回全部分组。统计基于当前筛选；没有邮箱/来源/状态/域名/triage/验证码等账号条件时包含匹配的空平台。definition 为可选平台目录元数据；count 是当前筛选账号数，definition.account_count 为平台全部账号数。",
   },
 );
 op("get", "/api/vault/stats", "getVaultStats", "工作区业务统计", "平台账号", {
+  description:
+    "total_platforms 包括独立目录中的空平台及由旧账号名推导的平台；账号统计不把空平台当作账号。",
   response: success(
     obj({
       total_vault_accounts: n(),
@@ -1525,17 +1726,40 @@ op(
   },
 );
 op("get", "/api/vault/export", "exportVault", "导出完整平台台账", "平台账号", {
+  parameters: [
+    q(
+      "ids",
+      { ...s(1700), pattern: "^[1-9][0-9]*(,[1-9][0-9]*){0,99}$" },
+      "可选，逗号分隔的 1–100 个账号 ID；与筛选条件取交集",
+      "1,2",
+    ),
+    ...filters,
+  ],
   response: obj(
     { version: n(), exported_at: date, accounts: arr(ref("Vault")) },
     ["version", "exported_at", "accounts"],
   ),
   credentials: true,
-  description: "上限一万条，含密码及 2FA；下载 JSON。",
+  description:
+    "支持全部、当前筛选或明确 ID 导出，上限一万条，包含密码及 TOTP。提供 ids 时任一所选账号不存在或不符合筛选则返回 409。响应始终为 version/exported_at/accounts JSON；文本/CSV 转换在客户端完成，不支持 format 查询参数。",
 });
+op(
+  "post",
+  "/api/vault/import-preview",
+  "previewVaultImport",
+  "脱敏预览平台账号文本导入",
+  "平台账号",
+  {
+    body: obj({ raw_text: vaultRawText, platform_name: s(100) }, ["raw_text"]),
+    example: vaultTextExample,
+    response: ref("VaultImportPreview"),
+    effects: "只读解析，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
+    description:
+      "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复，不检查库中已有账号。platform_name 用于补全缺失的平台名。",
+  },
+);
 op("post", "/api/vault/import", "importVault", "导入平台台账", "平台账号", {
-  body: obj({ accounts: { ...arr(ref("VaultInput"), 200), minItems: 1 } }, [
-    "accounts",
-  ]),
+  body: ref("VaultImport"),
   example: {
     accounts: [
       {
@@ -1545,8 +1769,9 @@ op("post", "/api/vault/import", "importVault", "导入平台台账", "平台账�
       },
     ],
   },
+  response: ref("VaultImportResult"),
   description:
-    "按不区分大小写的平台名、邮箱、用户名去重，已有记录跳过。CF 地址自动保护。",
+    "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。按不区分大小写的平台名、规范化邮箱及原样用户名识别重复，文件内同身份最后一条生效。duplicate_mode 默认 skip；显式 update 会使用导入记录完整更新已有账号，未提供的可选字段使用默认值。返回 created/updated/skipped 与文件内 duplicate_count；CF 地址自动保护。",
 });
 
 op(
@@ -1985,17 +2210,33 @@ op(
   "get",
   "/api/outlook/accounts/export",
   "exportOutlookAccounts",
-  "导出选定 Outlook 凭据",
+  "按范围导出 Outlook 凭据",
   "Outlook",
   {
     parameters: [
-      { ...q("ids", s(), "1–100 个逗号分隔 ID", "1,2"), required: true },
+      q(
+        "ids",
+        { ...s(1700), pattern: "^[1-9][0-9]*(,[1-9][0-9]*){0,99}$" },
+        "可选，1–100 个逗号分隔 ID；省略时导出全部或当前筛选",
+        "1,2",
+      ),
+      q("q", s(200), "邮箱、备注、分组或平台"),
+      q("group_id", n(1, 1000000), "分组 ID"),
+      q("tag_id", n(1, 1000000), "标签 ID"),
+      q("status", strEnum("active", "disabled"), "管理状态"),
+      q(
+        "auth_status",
+        strEnum("unchecked", "healthy", "reauth_required", "error"),
+        "上次收件检查状态",
+      ),
     ],
     response: obj(
       { version: n(), exported_at: date, accounts: arr(obj(outlookInput)) },
       ["version", "exported_at", "accounts"],
     ),
     credentials: true,
+    description:
+      "ids 省略时按列表筛选条件导出，最多一万条；提供 ids 时保持 1–100 条的所选导出规则。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。客户端可转为固定四段文本或 CSV，无 format 查询参数。",
   },
 );
 op(
@@ -2791,7 +3032,7 @@ op(
     auth: "cookie",
     response: success(ref("BackupCapabilities")),
     description:
-      "11 张业务表，全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。",
+      "schema 11 共 12 张业务表，包括独立 platforms（空平台也保留）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 文件。",
   },
 );
 op(
@@ -2853,7 +3094,12 @@ for (const name of ["dry-run", "preview"] as const) {
             false,
           ),
           obj(
-            { backup: ref("BackupDocument"), passphrase: s(1024) },
+            {
+              backup: {
+                oneOf: [ref("BackupDocument"), ref("LegacyBackupDocument")],
+              },
+              passphrase: s(1024),
+            },
             ["backup"],
             false,
           ),
@@ -2866,7 +3112,7 @@ for (const name of ["dry-run", "preview"] as const) {
       response: success(ref("BackupPreview")),
       effects: "不修改业务数据；认证、审计及可选幂等记录仍会更新。",
       description:
-        "dry-run 与 preview 为同一处理器。校验格式/schema/哈希、字段、主键/唯一约束及关联；明文上传只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。restorable=true 仅表示文件可恢复，不保证当前实例具备条件，应检查 confirmation_token 和 manifest.restore_available。示例仅展示结构，backup 必须整体替换为真实导出文件。",
+        "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
     },
   );
 }
@@ -2897,7 +3143,7 @@ op(
     },
     response: success(ref("BackupRestoreResult")),
     effects:
-      "替换 11 张业务表及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+      "替换 12 张业务表（含 platforms）及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
     description:
       "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。",
   },

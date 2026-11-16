@@ -25,6 +25,7 @@ export const PORTABLE_BACKUP_TABLES = [
   "account_tags",
   "cf_inbox_mails",
   "mail_rules",
+  "platforms",
   "platform_vault",
   "temp_emails",
   "temp_mailboxes",

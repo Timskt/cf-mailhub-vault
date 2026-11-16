@@ -791,9 +791,9 @@ test("incremental CF mail retrieval and mark_read=false preserve unread state wh
   }
 });
 
-test("2.2 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
+test("2.3 contract exposes actual success statuses, grants, body bounds and durable idempotency limits", () => {
   const spec = openApi();
-  assert.equal(API_VERSION, "2.2.0");
+  assert.equal(API_VERSION, "2.3.0");
   const entry = (operationId: string) => {
     const operation = operations.find((o) => o.operationId === operationId)!;
     return spec.paths[operation.path][operation.method] as any;
@@ -1520,7 +1520,9 @@ test("backup manifest, encrypted export, both previews and actual atomic restore
     );
     responseConforms("getBackupManifest", manifest.data);
     assert.equal(manifest.data.data.restore_available, true);
-    assert.equal(manifest.data.data.tables.length, 11);
+    assert.equal(manifest.data.data.tables.length, 12);
+    assert.equal(manifest.data.data.schema_version, 11);
+    assert.ok(manifest.data.data.tables.includes("platforms"));
     assert.ok(manifest.data.data.excluded.includes("R2 object contents"));
     const redacted = await f.request(
       "/api/backups/export",

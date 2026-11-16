@@ -115,11 +115,9 @@ const authStates = [
   "reauth_required",
   "error",
 ] as const;
-app.get("/accounts", async (c) => {
-  const query = text(c.req.query("q"), "搜索", 200).trim();
-  const limit = integer(c.req.query("limit"), "每页数量", 1, 100, 30),
-    page = integer(c.req.query("page"), "页码", 1, 100000, 1);
-  const store = db(c.env),
+async function accountFilter(env: Env, params: Record<string, string>) {
+  const query = text(params.q, "搜索", 200).trim();
+  const store = db(env),
     filters: Filter[] = [];
   if (query) {
     const [groups, platforms] = await Promise.all([
@@ -146,13 +144,13 @@ app.get("/accounts", async (c) => {
       ),
     );
   }
-  if (c.req.query("group_id"))
+  if (params["group_id"])
     filters.push(
-      eq("group_id", integer(c.req.query("group_id"), "分组", 1, 1000000)),
+      eq("group_id", integer(params["group_id"], "分组", 1, 1000000)),
     );
-  if (c.req.query("tag_id")) {
+  if (params["tag_id"]) {
     const links = await collect(store, "account_tags", {
-      where: eq("tag_id", integer(c.req.query("tag_id"), "标签", 1, 1000000)),
+      where: eq("tag_id", integer(params["tag_id"], "标签", 1, 1000000)),
       columns: ["account_id"],
     });
     filters.push(
@@ -162,21 +160,21 @@ app.get("/accounts", async (c) => {
       ),
     );
   }
-  if (c.req.query("status"))
+  if (params["status"])
     filters.push(
-      eq(
-        "status",
-        choice(c.req.query("status"), "状态", ["active", "disabled"]),
-      ),
+      eq("status", choice(params["status"], "状态", ["active", "disabled"])),
     );
-  if (c.req.query("auth_status"))
+  if (params["auth_status"])
     filters.push(
-      eq(
-        "auth_status",
-        choice(c.req.query("auth_status"), "授权状态", authStates),
-      ),
+      eq("auth_status", choice(params["auth_status"], "授权状态", authStates)),
     );
-  const where = and(...filters);
+  return and(...filters);
+}
+app.get("/accounts", async (c) => {
+  const limit = integer(c.req.query("limit"), "每页数量", 1, 100, 30),
+    page = integer(c.req.query("page"), "页码", 1, 100000, 1);
+  const store = db(c.env);
+  const where = await accountFilter(c.env, c.req.query());
   const [rows, total, all, disabled, healthy, unchecked, attention] =
     await Promise.all([
       store.select("accounts", {
@@ -256,10 +254,14 @@ app.get("/accounts/export", async (c) => {
     .split(",")
     .filter(Boolean)
     .map((id) => integer(id, "账号 ID", 1, Number.MAX_SAFE_INTEGER));
-  if (!ids.length || ids.length > 100) invalid("请选中 1–100 个账号后导出");
+  if (c.req.query("ids") !== undefined && (!ids.length || ids.length > 100))
+    invalid("请选中 1–100 个账号后导出");
   const results = await db(c.env).select("accounts", {
-    where: oneOf("id", ids),
+    where: ids.length
+      ? oneOf("id", ids)
+      : await accountFilter(c.env, c.req.query()),
     order: [["id", "asc"]],
+    limit: 10001,
     columns: [
       "email",
       "password",
@@ -269,6 +271,12 @@ app.get("/accounts/export", async (c) => {
       "group_id",
     ],
   });
+  if (results.length > 10000) invalid("账号超过一万条，请缩小筛选范围");
+  if (ids.length && results.length !== new Set(ids).size)
+    return c.json(
+      { success: false, message: "部分所选账号已不存在，请刷新后重试" },
+      409,
+    );
   return c.json(
     { version: 1, exported_at: new Date().toISOString(), accounts: results },
     200,

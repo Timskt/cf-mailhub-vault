@@ -1,6 +1,6 @@
 # MailHub & Vault 开发者指南
 
-契约版本 **2.2.0**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
+契约版本 **2.3.0**。基础地址：http://localhost:8787。JSON 使用 UTF-8。现有 /api 路径及旧响应保持兼容，版本号描述文档契约，不是在 URL 中追加 /v2。新增字段应被旧客户端忽略，未来破坏性变更使用新路径并提供迁移期。
 
 - [OpenAPI 3.1](http://localhost:8787/openapi.json)：用于生成类型、客户端、导入 API 工具。
 - [Postman 集合](http://localhost:8787/postman.json)：设置 base_url 和 api_key 后选择请求。
@@ -30,11 +30,11 @@ API Key 管理、审计、备份、数据源管理、凭据保护、Webhook 管�
 | vault:write | 台账写入/导入/批量整理；自动分配邮箱还需 mailbox:write |
 | admin | 全部已声明业务路由的 scope 检查；仍遵守资源限制和会话专属边界 |
 
-POST /api/external/register 同时要求 mailbox:write **和** vault:write。CF 邮件正文/原文/附件、Outlook 邮件读取/发送/回复、Outlook 池管理、规则、设置和搜索需要 admin。每个操作的 x-authorization.required_grants 表示全部必要权限，additional_grants 表示条件性附加权限；它们是本服务自定义授权元数据，不是 OAuth 的 scope 请求参数。
+POST /api/external/register 同时要求 mailbox:write **和** vault:write。CF 邮件正文/原文/附件、Outlook 邮件读取/发送/回复、Outlook 池管理、独立平台目录的全部操作、规则、设置和搜索需要 admin。每个操作的 x-authorization.required_grants 表示全部必要权限，additional_grants 表示条件性附加权限；它们是本服务自定义授权元数据，不是 OAuth 的 scope 请求参数。
 
 管理员通过 POST /api/api-keys 创建密钥，201 返回一次性 data.key；系统仅存哈希，列表只有元数据。默认 30 天、最多 365 天有效，撤销立即生效；上限 1000 条包含已撤销记录。有效期内的同一幂等创建请求可回放原密钥响应，因此该响应仍须按凭据保管。
 
-restrictions.emails/platforms 各为 1–100 个精确值、大小写规范化，禁止通配符；两者都设置时必须同时满足。受限密钥按解析后的真实资源授权，不能借 platform/vault_id 绕过邮箱范围。台账列表、汇总、导出、跨资源搜索等未在存储查询中强制限定范围的接口返回 RESOURCE_SCOPE_REQUIRED，附加筛选 query 也不会解锁；改用获准 ID/邮箱。CF 列表需显式提供获准 recipient，批量请求在处理前校验全部资源，任一越权整批 403。
+restrictions.emails/platforms 各为 1–100 个精确值、大小写规范化，禁止通配符；两者都设置时必须同时满足。受限密钥按解析后的真实资源授权，不能借 platform/vault_id 绕过邮箱范围。独立平台目录、台账列表、汇总、导入预览/导入、导出、跨资源搜索等未在存储查询中强制限定范围的接口返回 RESOURCE_SCOPE_REQUIRED，附加筛选 query 也不会解锁；改用获准 ID/邮箱。CF 列表需显式提供获准 recipient，批量请求在处理前校验全部资源，任一越权整批 403。
 
 
 ```
@@ -126,6 +126,41 @@ else:
     raise TimeoutError("等待验证邮件超时")
 ```
 
+
+## 独立平台管理与文本导入导出
+
+平台目录使用 /api/platforms，平台账号仍使用 /api/vault。平台可以暂时没有账号，也会在首页统计中计数。GET /api/platforms 返回 {success:true,data:[PlatformDefinition],total}，包含 name_key/name/url/category/remark/is_pinned/created_at/updated_at/account_count/managed。is_pinned 为 0/1；managed=false 是旧账号名称推导的平台，编辑后可保存为独立目录。全部目录操作需要 admin grant 或管理员会话；即使带 admin 的资源受限 Key 也不能调用。
+
+| 操作 | 请求 | 结果与边界 |
+| --- | --- | --- |
+| 新建 | POST /api/platforms {name,url?,category?,remark?,is_pinned?:boolean} | 支持空平台；名称不区分大小写，重名 409 |
+| 编辑/改名 | PUT /api/platforms/{name}，提交完整元数据 | name 省略沿用路径名称；其余省略字段恢复默认值；重命名同步全部账号和邮箱关联，目标重名 409 |
+| 合并 | POST /api/platforms/{name}/merge {target:"已有目标"} | 目标须存在，采用目标元数据，保留所有账号（包括逻辑重复账号）；同名 400 |
+| 删除 | DELETE /api/platforms/{name} | 仍有账号时 409，需先移走账号或明确合并 |
+
+路径 name 须 URL 编码。GET /api/vault/platforms 保持原聚合响应并增加可选 definition；未按邮箱、来源、状态、域名、triage、验证码等账号条件筛选时包含匹配空平台。聚合 count 是当前筛选的账号数，definition.account_count 是该平台全部账号数。GET /api/vault/stats 的 total_platforms 包括空平台。
+
+文本导入可粘贴 ---- 分隔的固定格式、带表头的 CSV/制表符文本或 JSON。默认完整列顺序如下；可使用带表头的子集，或在 platform_name 参数指定默认平台后使用“邮箱----密码”简写。选用 JSON 账号数组时仍使用原 accounts[] 入口。
+
+
+```
+platform_name----account_email----password----username----email_source----category----status----platform_url----totp_secret----proxy_node----remark
+Example----demo@example.com----Example-password-42----demo----external----开发服务----active----https://example.com/------------示例账号
+```
+
+
+含分隔符、引号或换行的字段用双引号包住，内部引号写成两个引号；不能按行简单 split 后丢弃空字段。密码的空格有意义，转换器不应裁剪或改写凭据。CSV 中公式样式的单元格也应作为纯文本导入到表格工具，不应执行。
+
+1. POST /api/vault/import-preview {raw_text,platform_name?}，最多 200 条、文本 UTF-8 ≤1 MiB。响应平铺 success/valid_count/error_count/duplicate_count/rows。rows 只返回 line/platform_name/account_email/username/duplicate/error，不回显密码、TOTP 或原始行；文本 line 是记录起始物理行，JSON line 是数组位置从 1 开始。
+2. valid_count 是文件内去重后的有效条数，duplicate_count 是文件内重复行数，预览不查询库中重复；同一身份在文件内最后一条生效。身份由不区分大小写的平台名、规范化邮箱及原样用户名组成。
+3. POST /api/vault/import 使用 {raw_text,platform_name?,duplicate_mode?} 或 {accounts:[...],duplicate_mode?}，两种输入不可混用。任意行无效整批不写入；duplicate_mode 默认为 skip，明确 update 才更新库中已有账号。update 是完整记录更新，缺失可选字段使用默认值，需提交希望保留的密码、TOTP、备注等字段。
+4. 响应为 {success:true,message,created,updated,skipped,duplicate_count}，核对实际保存结果。文本省略来源时 Outlook/Hotmail/Live/MSN 邮箱自动识别 outlook，其他 external；accounts[] 沿用默认 cf_domain。CF 来源的邮箱关联会受保护。
+
+GET /api/vault/export 支持与列表相同的筛选参数（如 platform/mailbox/q/status/triage）及可选 ids=1,2（最多 100 个）。提供 ids 时与筛选取交集，任何所选记录丢失或不匹配返回 409；省略 ids 可导出全部或当前筛选，上限一万条。
+
+GET /api/outlook/accounts/export 的 ids 也可省略，导出全部或 q/group_id/tag_id/status/auth_status 筛选结果，上限一万条；提供 ids 时沿用 1–100 个所选 ID 的导出语义。两类接口均返回 version/exported_at/accounts JSON，UI 再转换为可预览、复制或下载的 ---- 文本/CSV；服务端没有 format=text 或 format=csv 参数。平台账号文本不替代含空平台目录的完整加密业务备份。
+
+Outlook 标准文本为“邮箱----密码----client_id----refresh_token”（英文表头 email/password/client_id/refresh_token），可附加 remark 列。Outlook 的导入请求与鉴权契约保持原样。导出包含登录凭据，仅在明确选择范围后读取；不要把示例中的虚构密码当作真实账号配置。
 
 ## 批量操作与失败恢复
 
@@ -275,7 +310,9 @@ HTTP 框架把 receiveMailHubWebhook 的 status 原样返回；config.secret 来
 
 ## 便携业务备份与恢复
 
-GET /api/backups/manifest 是当前范围的权威入口，名称为 **便携业务备份**，format=mailhub-backup、文件 version=1、schema_version=10。共 11 张业务表：settings（仅 default_prefix/mail_retention_days/token_refresh_batch/default_mail_domain）、groups、tags、accounts、account_tags、cf_inbox_mails、mail_rules、platform_vault、temp_emails、temp_mailboxes、domains。**全部表合计最多 1000 条，明文 JSON 含清单最多 1 MiB**；导出还会预留清单空间。大数据量请使用数据源迁移或数据库原生备份。
+GET /api/backups/manifest 是当前范围的权威入口，名称为 **便携业务备份**，format=mailhub-backup、文件 version=1、schema_version=11。共 12 张业务表：settings（仅 default_prefix/mail_retention_days/token_refresh_batch/default_mail_domain）、groups、tags、accounts、account_tags、cf_inbox_mails、mail_rules、platforms、platform_vault、temp_emails、temp_mailboxes、domains。**全部表合计最多 1000 条，明文 JSON 含清单最多 1 MiB**；导出还会预留清单空间。大数据量请使用数据源迁移或数据库原生备份。
+
+platforms 包含空平台、名称、官网、分类、备注、置顶和时间戳；完整恢复会替换目标的平台目录。兼容已发布的 schema 10（原 11 表）：先校验原始 schema hash、完整字段集合、逐表/整体 hash 和业务关联，再根据 platform_vault 按 ID 顺序、平台名去空格且不区分大小写生成目录，保留全部原账号字段，计算 schema 11 摘要。目录采用首条账号的名称、安全官网、分类及时间；平台备注为空、置顶为 0，账号自己的备注和置顶仍保留在账号上。转换是确定性的，不修改上传文件；返回的 table_counts/backup_hash 对应转换后文档。派生平台也计入 1000 行/1 MiB 上限，超过时明确拒绝。旧脱敏明文仍仅能预览，旧包含凭据的备份仍必须加密；未知版本、新字段、篡改或伪改版本号均拒绝。
 
 管理员/会话密钥、API Keys、OAuth 会话、幂等记录、审计、Webhook 配置及队列、数据源连接/协调器状态、Worker 配置/Secrets、**R2 对象内容均排除**。JSON 只保留 raw_object_key/attachment_manifest 引用，原始邮件和附件须单独备份并先恢复到目标 R2 桶。域名 DNS/Email Routing、微软授权与目标环境配置也须另外准备。manifest.external_dependencies/excluded 会逐项列明。
 
@@ -335,7 +372,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 
 ## 接口索引
 
-共 119 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
+共 125 个 HTTP 操作。public=公开，key=仅 API Key，admin=API Key 或管理员 Cookie（需满足 grants/资源限制），cookie=仅管理员 Cookie。grants 列为全部必要 scope，admin scope 可替代业务 scope 检查，不能代替 cookie。
 
 | operationId | 方法与路径 | 认证 / grants | 成功状态 | 用途 |
 | --- | --- | --- | --- | --- |
@@ -347,6 +384,11 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | batchLookupVerification | POST `/api/automation/verification/batch` | admin / verify:read | 200 | 批量查收，逐项报告结果 |
 | lookupCodeLegacy | GET `/api/external/code` | admin / verify:read | 200 | 兼容取码接口 |
 | registerPlatformMailbox | POST `/api/external/register` | admin / mailbox:write + vault:write | 200 | 原子分配邮箱并登记平台 |
+| listPlatformDefinitions | GET `/api/platforms` | admin / admin | 200 | 查看独立平台目录 |
+| createPlatformDefinition | POST `/api/platforms` | admin / admin | 200 | 创建平台，可暂不添加账号 |
+| updatePlatformDefinition | PUT `/api/platforms/{name}` | admin / admin | 200 | 编辑或重命名平台 |
+| mergePlatformDefinitions | POST `/api/platforms/{name}/merge` | admin / admin | 200 | 将平台合并到已有目标 |
+| deletePlatformDefinition | DELETE `/api/platforms/{name}` | admin / admin | 200 | 删除没有账号的平台 |
 | listVaultAccounts | GET `/api/vault` | admin / vault:read | 200 | 分页筛选平台账号 |
 | createVaultAccount | POST `/api/vault` | admin / vault:write（含条件性附加权限） | 200 | 登记平台账号 |
 | batchUpdateVaultAccounts | POST `/api/vault/batch` | admin / vault:write | 200 | 批量整理平台账号 |
@@ -358,6 +400,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | toggleVaultPin | POST `/api/vault/{id}/pin` | admin / vault:write | 200 | 切换账号置顶 |
 | lookupVaultCode | GET `/api/vault/{id}/code` | admin / verify:read | 200 | 查收台账账号验证码 |
 | exportVault | GET `/api/vault/export` | admin / vault:read | 200 | 导出完整平台台账（包含凭据） |
+| previewVaultImport | POST `/api/vault/import-preview` | admin / vault:write | 200 | 脱敏预览平台账号文本导入 |
 | importVault | POST `/api/vault/import` | admin / vault:write | 200 | 导入平台台账 |
 | listMailboxes | GET `/api/mailboxes` | admin / verify:read | 200 | 分页查询邮箱与使用情况 |
 | generateMailbox | POST `/api/mailboxes/generate` | admin / mailbox:write | 200 | 分配单个邮箱 |
@@ -391,7 +434,7 @@ GET /api/audit 可按 action/actor_type/before/after 和分页查询，metadata 
 | getOutlookAccount | GET `/api/outlook/accounts/{id}` | admin / admin | 200 | 读取完整 Outlook 配置（包含凭据） |
 | updateOutlookAccount | PUT `/api/outlook/accounts/{id}` | admin / mailbox:write | 200 | 编辑 Outlook 配置 |
 | deleteOutlookAccount | DELETE `/api/outlook/accounts/{id}` | admin / mailbox:write | 200 | 删除托管 Outlook 配置 |
-| exportOutlookAccounts | GET `/api/outlook/accounts/export` | admin / admin | 200 | 导出选定 Outlook 凭据（包含凭据） |
+| exportOutlookAccounts | GET `/api/outlook/accounts/export` | admin / admin | 200 | 按范围导出 Outlook 凭据（包含凭据） |
 | previewOutlookImport | POST `/api/outlook/parse-preview` | admin / admin | 200 | 脱敏预览 Outlook 导入 |
 | importOutlookAccounts | POST `/api/outlook/batch-import` | admin / admin | 200 | 批量导入 Outlook |
 | batchOutlookAccounts | POST `/api/outlook/accounts/batch` | admin / admin | 200 | 批量操作 Outlook |

@@ -350,6 +350,200 @@
       ]
     },
     {
+      "name": "平台管理",
+      "item": [
+        {
+          "name": "listPlatformDefinitions · 查看独立平台目录",
+          "request": {
+            "method": "GET",
+            "description": "返回含空平台的完整目录及账号数量。managed=false 表示从旧账号名推导、尚未接管的记录；可通过编辑保存。需要 admin grant 或管理员会话，不接受附带邮箱/平台资源限制的 Key。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/platforms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "platforms"
+              ],
+              "query": [],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "createPlatformDefinition · 创建平台，可暂不添加账号",
+          "request": {
+            "method": "POST",
+            "description": "创建独立平台目录，不分配邮箱。名称去除两端空格后不区分大小写；已有目录或旧账号使用相同名称时 409 CONFLICT。仅 admin grant 或管理员会话，资源受限 Key 不可用。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/platforms",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "platforms"
+              ],
+              "query": [],
+              "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Example\",\n  \"url\": \"https://example.com/\",\n  \"category\": \"开发服务\",\n  \"remark\": \"平台级说明\",\n  \"is_pinned\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "updatePlatformDefinition · 编辑或重命名平台",
+          "request": {
+            "method": "PUT",
+            "description": "name 路径段须 URL 编码。正文 name 省略时沿用路径名称；其余省略字段恢复默认值（url/remark 为空、category=其他、is_pinned=false），请提交希望保留的完整元数据。撞名返回 409 CONFLICT，须由使用者选择显式 merge；不隐式合并。仅 admin grant 或管理员会话，资源受限 Key 不可用。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：保存完整平台定义；重命名原子更新全部关联账号与邮箱的平台名称。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/platforms/:name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "platforms",
+                ":name"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "REPLACE_NAME",
+                  "description": "name，作为路径段时 URL 编码"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Example renamed\",\n  \"url\": \"https://example.com/\",\n  \"category\": \"开发服务\",\n  \"remark\": \"已更新的平台说明\",\n  \"is_pinned\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "mergePlatformDefinitions · 将平台合并到已有目标",
+          "request": {
+            "method": "POST",
+            "description": "目标必须已存在（目录或旧账号可推导平台），否则 404；源与目标同名（不区分大小写）返回 400。逻辑重复账号也全部保留，不覆盖密码或删除账号。仅 admin grant 或管理员会话，资源受限 Key 不可用。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：源平台全部账号及邮箱关联移至目标；移除源目录，保留目标元数据及所有账号。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/platforms/:name/merge",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "platforms",
+                ":name",
+                "merge"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "REPLACE_NAME",
+                  "description": "name，作为路径段时 URL 编码"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"target\": \"Example\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "deletePlatformDefinition · 删除没有账号的平台",
+          "request": {
+            "method": "DELETE",
+            "description": "平台仍被账号引用时原子拒绝并返回 409 REFERENCE_EXISTS，请先迁移账号或明确合并到其他平台。仅 admin grant 或管理员会话，资源受限 Key 不可用。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：修改业务数据",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/platforms/:name",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "platforms",
+                ":name"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "name",
+                  "value": "REPLACE_NAME",
+                  "description": "name，作为路径段时 URL 编码"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "平台账号",
       "item": [
         {
@@ -524,7 +718,7 @@
           "name": "listPlatforms · 按平台汇总账号和待处理数",
           "request": {
             "method": "GET",
-            "description": "只有传 page 或 limit 时分页；未传则返回全部分组。统计基于当前筛选。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "description": "只有传 page 或 limit 时分页；未传则返回全部分组。统计基于当前筛选；没有邮箱/来源/状态/域名/triage/验证码等账号条件时包含匹配的空平台。definition 为可选平台目录元数据；count 是当前筛选账号数，definition.account_count 为平台全部账号数。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/vault/platforms",
@@ -618,7 +812,7 @@
           "name": "getVaultStats · 工作区业务统计",
           "request": {
             "method": "GET",
-            "description": "工作区业务统计\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "description": "total_platforms 包括独立目录中的空平台及由旧账号名推导的平台；账号统计不把空平台当作账号。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/vault/stats",
@@ -829,7 +1023,7 @@
           "name": "exportVault · 导出完整平台台账",
           "request": {
             "method": "GET",
-            "description": "上限一万条，含密码及 2FA；下载 JSON。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "description": "支持全部、当前筛选或明确 ID 导出，上限一万条，包含密码及 TOTP。提供 ids 时任一所选账号不存在或不符合筛选则返回 409。响应始终为 version/exported_at/accounts JSON；文本/CSV 转换在客户端完成，不支持 format 查询参数。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/vault/export",
@@ -841,8 +1035,110 @@
                 "vault",
                 "export"
               ],
+              "query": [
+                {
+                  "key": "ids",
+                  "value": "1,2",
+                  "description": "可选，逗号分隔的 1–100 个账号 ID；与筛选条件取交集",
+                  "disabled": false
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "搜索关键词",
+                  "disabled": true
+                },
+                {
+                  "key": "mailbox",
+                  "value": "",
+                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "disabled": true
+                },
+                {
+                  "key": "platform",
+                  "value": "",
+                  "description": "精确平台名，不区分大小写",
+                  "disabled": true
+                },
+                {
+                  "key": "category",
+                  "value": "",
+                  "description": "分类",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "手动登记状态",
+                  "disabled": true
+                },
+                {
+                  "key": "email_source",
+                  "value": "",
+                  "description": "邮箱来源",
+                  "disabled": true
+                },
+                {
+                  "key": "domain",
+                  "value": "",
+                  "description": "收件域名",
+                  "disabled": true
+                },
+                {
+                  "key": "has_code",
+                  "value": "",
+                  "description": "仅含历史验证码",
+                  "disabled": true
+                },
+                {
+                  "key": "triage",
+                  "value": "",
+                  "description": "需处理 / 待检查 / 已连接",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "previewVaultImport · 脱敏预览平台账号文本导入",
+          "request": {
+            "method": "POST",
+            "description": "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复，不检查库中已有账号。platform_name 用于补全缺失的平台名。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：只读解析，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}",
+                "description": "可选持久化去重键，作用域为已认证身份 + 方法 + 路径。重试须保持原始正文、查询串及 Content-Type 完全一致；409 IDEMPOTENCY_UNKNOWN 时先核对资源，绝不更换键自动重执。不要对轮询重复使用同一个键。",
+                "disabled": true
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/vault/import-preview",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "vault",
+                "import-preview"
+              ],
               "query": [],
               "variable": []
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_text\": \"platform_name----account_email----password----email_source\\nExample----user@example.com----Example-password-42----external\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           }
         },
@@ -850,7 +1146,7 @@
           "name": "importVault · 导入平台台账",
           "request": {
             "method": "POST",
-            "description": "按不区分大小写的平台名、邮箱、用户名去重，已有记录跳过。CF 地址自动保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "description": "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。按不区分大小写的平台名、规范化邮箱及原样用户名识别重复，文件内同身份最后一条生效。duplicate_mode 默认 skip；显式 update 会使用导入记录完整更新已有账号，未提供的可选字段使用默认值。返回 created/updated/skipped 与文件内 duplicate_count；CF 地址自动保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
             "header": [
               {
                 "key": "Content-Type",
@@ -2210,10 +2506,10 @@
           }
         },
         {
-          "name": "exportOutlookAccounts · 导出选定 Outlook 凭据",
+          "name": "exportOutlookAccounts · 按范围导出 Outlook 凭据",
           "request": {
             "method": "GET",
-            "description": "导出选定 Outlook 凭据\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
+            "description": "ids 省略时按列表筛选条件导出，最多一万条；提供 ids 时保持 1–100 条的所选导出规则。响应始终为 version/exported_at/accounts JSON，包含密码、client_id 与 refresh_token。客户端可转为固定四段文本或 CSV，无 format 查询参数。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入\n响应包含凭据。",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/outlook/accounts/export",
@@ -2230,8 +2526,38 @@
                 {
                   "key": "ids",
                   "value": "1,2",
-                  "description": "1–100 个逗号分隔 ID",
+                  "description": "可选，1–100 个逗号分隔 ID；省略时导出全部或当前筛选",
                   "disabled": false
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "邮箱、备注、分组或平台",
+                  "disabled": true
+                },
+                {
+                  "key": "group_id",
+                  "value": "",
+                  "description": "分组 ID",
+                  "disabled": true
+                },
+                {
+                  "key": "tag_id",
+                  "value": "",
+                  "description": "标签 ID",
+                  "disabled": true
+                },
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "管理状态",
+                  "disabled": true
+                },
+                {
+                  "key": "auth_status",
+                  "value": "",
+                  "description": "上次收件检查状态",
+                  "disabled": true
                 }
               ],
               "variable": []
@@ -4086,7 +4412,7 @@
           "name": "getBackupManifest · 查询便携业务备份范围与限制",
           "request": {
             "method": "GET",
-            "description": "11 张业务表，全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "description": "schema 11 共 12 张业务表，包括独立 platforms（空平台也保留）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
             "auth": {
               "type": "noauth"
             },
@@ -4178,7 +4504,7 @@
           "name": "dryRunBackup · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。校验格式/schema/哈希、字段、主键/唯一约束及关联；明文上传只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。restorable=true 仅表示文件可恢复，不保证当前实例具备条件，应检查 confirmation_token 和 manifest.restore_available。示例仅展示结构，backup 必须整体替换为真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -4222,7 +4548,7 @@
           "name": "previewBackupRestore · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。校验格式/schema/哈希、字段、主键/唯一约束及关联；明文上传只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。restorable=true 仅表示文件可恢复，不保证当前实例具备条件，应检查 confirmation_token 和 manifest.restore_available。示例仅展示结构，backup 必须整体替换为真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。支持 schema 11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，再确定性补出 platforms 并计算 schema 11 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 12 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -4266,7 +4592,7 @@
           "name": "restoreBackup · 确认并恢复便携业务备份",
           "request": {
             "method": "POST",
-            "description": "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：替换 11 张业务表及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+            "description": "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：替换 12 张业务表（含 platforms）及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
             "auth": {
               "type": "noauth"
             },

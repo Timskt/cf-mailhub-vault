@@ -1,3 +1,6 @@
+import { PlatformManager, PlatformEditor } from "@/features/platform-manager";
+import { VaultImportDialog } from "@/features/vault-import";
+import { AccountExportDialog } from "@/features/account-export";
 import { VerificationLookup } from "@/features/verification";
 import { TotpDialog, TotpField } from "@/features/totp";
 import {
@@ -86,7 +89,12 @@ import {
 } from "@/lib/password-generator";
 import { normalizeTotp } from "@/lib/totp";
 import { cn } from "@/lib/utils";
-import type { Mailbox, Vault, VaultPlatform } from "@/lib/types";
+import type {
+  Mailbox,
+  Vault,
+  VaultPlatform,
+  PlatformDefinition,
+} from "@/lib/types";
 import {
   Activity,
   ArrowRight,
@@ -163,6 +171,11 @@ export default function VaultPage({
   const [sort, setSort] = useState("name");
   const [advanced, setAdvanced] = useState(false);
   const [restore, setRestore] = useState(false);
+  const [managePlatforms, setManagePlatforms] = useState(false);
+  const [platformEditor, setPlatformEditor] = useState<
+    PlatformDefinition | "new" | null
+  >(null);
+  const [exportAll, setExportAll] = useState(false);
   const [selected, setSelected] = useState<{
     name: string;
     filters: VaultFilters;
@@ -199,32 +212,28 @@ export default function VaultPage({
     <>
       <PageHeader
         title="平台账号"
-        description="先找到平台，再管理它的账号。邮箱连接问题在这里直接处理。"
+        description="平台资料独立管理，账号按平台归档。支持固定文本导入、复制和导出。"
       >
-        <Menu
-          label="备份与恢复"
-          trigger={
-            <Button variant="outline">
-              <Download data-icon="inline-start" />
-              备份与恢复
-            </Button>
-          }
-          items={[
-            {
-              label: "导出账号备份",
-              action: () => {
-                void action.run(async () => {
-                  download(
-                    await api("/api/vault/export"),
-                    "mailhub-vault.json",
-                  );
-                  toast.success("已导出，文件包含登录凭据，请妥善保存");
-                });
-              },
-            },
-            { label: "恢复账号备份", action: () => setRestore(true) },
-          ]}
-        />
+        <Button variant="outline" onClick={() => setManagePlatforms(true)}>
+          <Layers data-icon="inline-start" />
+          管理平台
+        </Button>
+        <Button variant="outline" onClick={() => setRestore(true)}>
+          <Upload data-icon="inline-start" />
+          导入账号
+        </Button>
+        <Button
+          variant="outline"
+          disabled={searching}
+          onClick={() => setExportAll(true)}
+        >
+          <Download data-icon="inline-start" />
+          导出账号
+        </Button>
+        <Button variant="outline" onClick={() => setPlatformEditor("new")}>
+          <Plus data-icon="inline-start" />
+          新建平台
+        </Button>
         <Button onClick={() => w.vault({})}>
           <Plus data-icon="inline-start" />
           登记账号
@@ -418,14 +427,14 @@ export default function VaultPage({
           description={
             filtered
               ? "搜索会同时匹配平台名称、邮箱、用户名和备注；试试清除筛选。"
-              : "同一平台下的账号会自动归到一张卡片中。"
+              : "先创建平台资料，再按需要登记账号。没有账号的平台也会保留。"
           }
         >
           <Button
             variant="outline"
-            onClick={filtered ? reset : () => w.vault({})}
+            onClick={filtered ? reset : () => setPlatformEditor("new")}
           >
-            {filtered ? "清除全部筛选" : "登记账号"}
+            {filtered ? "清除全部筛选" : "新建平台"}
           </Button>
         </Blank>
       ) : (
@@ -457,18 +466,53 @@ export default function VaultPage({
                       </button>
                     </CardTitle>
                     <CardDescription className="truncate">
-                      {p.categories.join(" · ") || "未分类"}
+                      {p.definition?.category ||
+                        p.categories.join(" · ") ||
+                        "未分类"}
                     </CardDescription>
                   </div>
-                  {!!p.pinned_count && (
+                  {p.definition && (
+                    <Menu
+                      label={`管理平台 ${p.platform_name}`}
+                      items={[
+                        {
+                          label: "编辑平台资料",
+                          icon: <Pencil />,
+                          action: () => setPlatformEditor(p.definition!),
+                        },
+                        {
+                          label: "管理全部平台",
+                          icon: <Layers />,
+                          action: () => setManagePlatforms(true),
+                        },
+                      ]}
+                    />
+                  )}
+                  {(!!p.pinned_count || !!p.definition?.is_pinned) && (
                     <Badge variant="outline">
                       <Pin data-icon="inline-start" />
-                      {p.pinned_count}
+                      {p.definition?.is_pinned ? "平台置顶" : p.pinned_count}
                     </Badge>
                   )}
                 </div>
               </CardHeader>
               <CardContent className="flex flex-1 flex-col gap-4">
+                {p.definition?.remark && (
+                  <p className="line-clamp-2 break-all text-sm text-muted-foreground">
+                    {p.definition.remark}
+                  </p>
+                )}
+                {safeUrl(p.definition?.url) && (
+                  <a
+                    href={safeUrl(p.definition?.url)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm hover:underline"
+                  >
+                    打开平台官网
+                    <ExternalLink className="size-3" />
+                  </a>
+                )}
                 <div className="flex items-baseline gap-2">
                   <strong className="text-3xl font-semibold tabular-nums">
                     {p.count}
@@ -543,7 +587,27 @@ export default function VaultPage({
           }}
         />
       )}
-      {restore && <RestoreVault close={() => setRestore(false)} />}
+      {restore && <VaultImportDialog close={() => setRestore(false)} />}
+      {exportAll && (
+        <AccountExportDialog
+          kind="vault"
+          title={filtered ? "导出筛选账号" : "导出全部平台账号"}
+          endpoint={`/api/vault/export?${query({ ...filters, q: search })}`}
+          close={() => setExportAll(false)}
+        />
+      )}
+      {managePlatforms && (
+        <PlatformManager
+          close={() => setManagePlatforms(false)}
+          openAccounts={(name) => open(name)}
+        />
+      )}
+      {platformEditor && (
+        <PlatformEditor
+          initial={platformEditor === "new" ? undefined : platformEditor}
+          close={() => setPlatformEditor(null)}
+        />
+      )}
     </>
   );
 }
@@ -569,6 +633,9 @@ function PlatformDrawer({
   );
   const [bulk, setBulk] = useState<BulkField | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportPlatform, setExportPlatform] = useState(false);
+  const [singleExport, setSingleExport] = useState<Vault | null>(null);
+  const [importPlatform, setImportPlatform] = useState(false);
   const [view, setView] = useState<"cards" | "table">(() => {
     try {
       return localStorage.getItem(viewPreference) === "table"
@@ -697,6 +764,14 @@ function PlatformDrawer({
                 options={triageOptions}
               />
               <RefreshButton busy={rows.loading} onClick={w.refresh} />
+              <Button variant="outline" onClick={() => setImportPlatform(true)}>
+                <Upload data-icon="inline-start" />
+                导入账号
+              </Button>
+              <Button variant="outline" onClick={() => setExportPlatform(true)}>
+                <Download data-icon="inline-start" />
+                导出此平台
+              </Button>
               <Pick
                 label="账号展示方式"
                 value={view}
@@ -894,6 +969,7 @@ function PlatformDrawer({
                       select={(v) => selectAccount(a, v)}
                       verify={() => setVerification(a)}
                       totp={() => setTotp(a)}
+                      exportAccount={() => setSingleExport(a)}
                     />
                   ))}
                 </TableBody>
@@ -907,6 +983,7 @@ function PlatformDrawer({
                   account={a}
                   verify={() => setVerification(a)}
                   totp={() => setTotp(a)}
+                  exportAccount={() => setSingleExport(a)}
                   selected={selection.has(a.id)}
                   selectionDisabled={loading}
                   select={(v) => selectAccount(a, v)}
@@ -947,10 +1024,32 @@ function PlatformDrawer({
           }}
         />
       )}
+      {importPlatform && (
+        <VaultImportDialog
+          platform={name}
+          close={() => setImportPlatform(false)}
+        />
+      )}
+      {exportPlatform && (
+        <AccountExportDialog
+          kind="vault"
+          title={`导出 ${name} 的账号`}
+          endpoint={`/api/vault/export?${query({ platform: name })}`}
+          close={() => setExportPlatform(false)}
+        />
+      )}
       {exporting && (
         <ExportSelectedVault
           accounts={[...selection.values()]}
           close={() => setExporting(false)}
+        />
+      )}
+      {singleExport && (
+        <AccountExportDialog
+          kind="vault"
+          title={`导出 ${singleExport.account_email}`}
+          endpoint={`/api/vault/export?ids=${singleExport.id}`}
+          close={() => setSingleExport(null)}
         />
       )}
       {verification && (
@@ -1151,112 +1250,13 @@ function ExportSelectedVault({
   accounts: SelectedAccount[];
   close: () => void;
 }) {
-  const action = useAction({ inline: true });
-  const [progress, setProgress] = useState(0);
-  const request = useRef<AbortController | null>(null);
-  useEffect(() => () => request.current?.abort(), []);
-  const cancel = () => {
-    request.current?.abort();
-    close();
-  };
   return (
-    <Modal
+    <AccountExportDialog
+      kind="vault"
       title={`导出已选 ${accounts.length} 个账号`}
-      description="下载的 JSON 包含明文密码和 2FA 密钥，可用于本平台恢复，请妥善保存。"
-      close={cancel}
-    >
-      <ModalBody>
-        <Alert>
-          <AlertDescription>
-            只有点击“确认读取并导出”后，才读取这些账号的完整详情。任一账号读取失败会停止导出，保留选择供重试。
-          </AlertDescription>
-        </Alert>
-        <ActionError message={action.error} />
-        <ul className="flex max-h-48 flex-col gap-2 overflow-y-auto text-sm">
-          {accounts.map((a) => (
-            <li className="break-all" key={a.id}>
-              {a.account_email} · {a.username || "无用户名"} · #{a.id}
-            </li>
-          ))}
-        </ul>
-        {action.busy && (
-          <p role="status">
-            已读取 {progress} / {accounts.length} 个账号…
-          </p>
-        )}
-      </ModalBody>
-      <ModalFooter>
-        <Button variant="outline" onClick={cancel}>
-          {action.busy ? "取消读取" : "取消"}
-        </Button>
-        <BusyButton
-          busy={action.busy}
-          onClick={() => {
-            void action.run(async () => {
-              const controller = new AbortController();
-              request.current = controller;
-              setProgress(0);
-              const details: Vault[] = new Array(accounts.length);
-              let cursor = 0,
-                completed = 0;
-              try {
-                const workers = Array.from(
-                  { length: Math.min(3, accounts.length) },
-                  async () => {
-                    while (
-                      cursor < accounts.length &&
-                      !controller.signal.aborted
-                    ) {
-                      const index = cursor++;
-                      const result = await api<Vault>(
-                        `/api/vault/${accounts[index].id}`,
-                        "GET",
-                        undefined,
-                        controller.signal,
-                      );
-                      if (controller.signal.aborted) return;
-                      if (result.data.id !== accounts[index].id)
-                        throw new Error(
-                          "账号详情与选择不一致，已停止导出，请刷新后重试。",
-                        );
-                      details[index] = result.data;
-                      setProgress(++completed);
-                    }
-                  },
-                );
-                // Abort other requests on the first failure, then drain them before dropping secrets.
-                try {
-                  await Promise.all(workers);
-                } catch (error) {
-                  controller.abort();
-                  await Promise.allSettled(workers);
-                  throw error;
-                }
-                if (controller.signal.aborted) return;
-                download(
-                  {
-                    version: 1,
-                    exported_at: new Date().toISOString(),
-                    accounts: details,
-                  },
-                  `mailhub-vault-selected-${accounts.length}.json`,
-                );
-                toast.success(
-                  `已导出 ${accounts.length} 个账号，请妥善保存含凭据的文件`,
-                );
-                close();
-              } finally {
-                details.length = 0;
-                if (request.current === controller) request.current = null;
-              }
-            });
-          }}
-        >
-          <Download data-icon="inline-start" />
-          确认读取并导出
-        </BusyButton>
-      </ModalFooter>
-    </Modal>
+      endpoint={`/api/vault/export?ids=${accounts.map((a) => a.id).join(",")}`}
+      close={close}
+    />
   );
 }
 
@@ -1264,6 +1264,7 @@ type AccountProps = {
   account: Vault;
   verify: () => void;
   totp: () => void;
+  exportAccount: () => void;
   selected: boolean;
   selectionDisabled: boolean;
   select: (checked: boolean) => void;
@@ -1275,6 +1276,7 @@ function VaultAccountCard({
   account: a,
   verify,
   totp,
+  exportAccount,
   selected,
   selectionDisabled,
   select,
@@ -1298,6 +1300,7 @@ function VaultAccountCard({
     );
   const items = [
     { label: "编辑账号", icon: <Pencil />, action: () => w.vault(a) },
+    { label: "导出账号 / 复制配置", icon: <Download />, action: exportAccount },
     {
       label: "打开收件箱",
       icon: <Inbox />,
@@ -1833,6 +1836,10 @@ function VaultForm({
   close: () => void;
 }) {
   const w = useWorkspace();
+  const catalog = useResource<PlatformDefinition[]>(
+    "/api/platforms",
+    w.revision,
+  );
   const action = useAction({ inline: true });
   const [totpError, setTotpError] = useState("");
   const [qrBusy, setQrBusy] = useState(false);
@@ -1890,6 +1897,33 @@ function VaultForm({
         <ActionError message={action.error} />
         <fieldset disabled={action.busy} className="contents">
           <FieldGroup className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+            <Field className="sm:col-span-2">
+              <SelectField
+                label="选择已有平台"
+                value=""
+                onChange={(value) => {
+                  const platform = catalog.result?.data.find(
+                    (p) => p.name === value,
+                  );
+                  if (platform)
+                    setData((old) => ({
+                      ...old,
+                      platform_name: platform.name,
+                      platform_url: platform.url,
+                      category: platform.category,
+                    }));
+                }}
+                options={[
+                  ["", "选择平台，自动填入名称、官网和分类"],
+                  ...(catalog.result?.data || []).map(
+                    (p) => [p.name, p.name] as [string, string],
+                  ),
+                ]}
+              />
+              <FieldDescription>
+                也可直接在下方填写新平台名称，保存账号时自动建立平台。
+              </FieldDescription>
+            </Field>
             <TextField
               label="平台名称"
               required
@@ -2011,84 +2045,5 @@ function VaultForm({
         </BusyButton>
       </ModalFooter>
     </form>
-  );
-}
-function RestoreVault({ close }: { close: () => void }) {
-  const w = useWorkspace();
-  const [raw, setRaw] = useState("");
-  const action = useAction({ inline: true });
-  return (
-    <Modal
-      title="恢复平台账号"
-      description="导入本平台导出的 JSON 文件，每批最多 200 条。重复记录自动跳过。"
-      close={close}
-    >
-      <ModalBody>
-        <ActionError message={action.error} />
-        <FieldGroup>
-          <Field>
-            <FieldLabel htmlFor="vault-file">选择备份</FieldLabel>
-            <Input
-              id="vault-file"
-              type="file"
-              accept=".json"
-              onChange={(e) => {
-                void action.run(async () =>
-                  setRaw(await readFile(e.target.files?.[0])),
-                );
-              }}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="vault-restore">或粘贴 JSON</FieldLabel>
-            <Textarea
-              id="vault-restore"
-              rows={6}
-              value={raw}
-              onChange={(e) => setRaw(e.target.value)}
-            />
-          </Field>
-        </FieldGroup>
-        <Alert>
-          <AlertDescription>
-            恢复登录记录与邮箱绑定。分组、标签、邮件和系统设置请使用完整数据库备份。
-          </AlertDescription>
-        </Alert>
-      </ModalBody>
-      <ModalFooter>
-        <Button variant="outline" onClick={close}>
-          取消
-        </Button>
-        <BusyButton
-          busy={action.busy}
-          disabled={!raw.trim()}
-          onClick={() => {
-            void action.run(async () => {
-              let parsed;
-              try {
-                parsed = JSON.parse(raw);
-              } catch {
-                throw new Error("备份不是有效的 JSON，请检查文件内容后重试。");
-              }
-              const accounts = Array.isArray(parsed)
-                ? parsed
-                : parsed?.accounts;
-              if (!Array.isArray(accounts) || !accounts.length)
-                throw new Error("文件中没有账号记录");
-              for (let i = 0; i < accounts.length; i += 200)
-                await api("/api/vault/import", "POST", {
-                  accounts: accounts.slice(i, i + 200),
-                });
-              w.refresh();
-              toast.success("账号备份已恢复");
-              close();
-            });
-          }}
-        >
-          <Upload data-icon="inline-start" />
-          恢复账号
-        </BusyButton>
-      </ModalFooter>
-    </Modal>
   );
 }

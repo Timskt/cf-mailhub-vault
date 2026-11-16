@@ -62,6 +62,30 @@ export async function plan(
     return [...map.values()];
   }
   async function references(table: Table, rows: Row[]) {
+    if (table === "platform_vault") {
+      const definitions = new Map<string, Row>();
+      for (const row of rows) {
+        const name = String(row.platform_name).trim();
+        const name_key = name.toLowerCase();
+        if (!definitions.has(name_key))
+          definitions.set(name_key, {
+            ...defaults("platforms"),
+            name_key,
+            name,
+            url: String(row.platform_url || ""),
+            category: String(row.category || "其他"),
+          });
+      }
+      if (definitions.size) {
+        for (const prior of await find(
+          "platforms",
+          oneOf("name_key", [...definitions.keys()]),
+        ))
+          definitions.delete(String(prior.name_key));
+        for (const definition of definitions.values())
+          remember("platforms", definition);
+      }
+    }
     if (table === "cf_inbox_mails") {
       const keys = rows
         .map((row) => row.raw_object_key)
@@ -106,7 +130,113 @@ export async function plan(
   }
   for (const mutation of mutations) {
     const result: MutationResult = { rows: [], changes: 0, lastId: 0 };
-    if (mutation.op === "assertExists") {
+    if (mutation.op === "platform") {
+      const key = mutation.source.trim().toLowerCase();
+      const source = (await find("platforms", eq("name_key", key)))[0];
+      const sourceAccounts = await find("platform_vault", {
+        field: "platform_name",
+        op: "ieq",
+        value: mutation.source,
+      });
+      if (mutation.action === "create") {
+        if (source || sourceAccounts.length)
+          throw new StorageError(
+            "CONFLICT",
+            "平台名称已存在，请编辑已有平台",
+            409,
+          );
+        const row = { ...defaults("platforms"), ...mutation.definition };
+        validateRow("platforms", row);
+        remember("platforms", row);
+        result.rows.push(row);
+        result.changes++;
+      } else {
+        if (!source && !sourceAccounts.length)
+          throw new StorageError("NOT_FOUND", "平台不存在，请刷新列表", 404);
+        if (mutation.action === "delete") {
+          if (sourceAccounts.length)
+            throw new StorageError(
+              "REFERENCE_EXISTS",
+              "平台仍有账号，请先移走账号或合并到其他平台",
+              409,
+            );
+          if (source) remember("platforms", source, true);
+          result.changes++;
+        } else {
+          const nextName = String(
+            mutation.action === "merge"
+              ? mutation.target
+              : mutation.definition?.name,
+          ).trim();
+          const nextKey = nextName.toLowerCase();
+          const target = (await find("platforms", eq("name_key", nextKey)))[0];
+          const targetAccounts = await find("platform_vault", {
+            field: "platform_name",
+            op: "ieq",
+            value: nextName,
+          });
+          if (mutation.action === "merge" && nextKey === key)
+            throw new StorageError("CONFLICT", "源平台和目标平台不能相同", 409);
+          if (mutation.action === "merge" && !target && !targetAccounts.length)
+            throw new StorageError(
+              "NOT_FOUND",
+              "目标平台不存在，请刷新列表",
+              404,
+            );
+          if (
+            mutation.action === "update" &&
+            nextKey !== key &&
+            (target || targetAccounts.length)
+          )
+            throw new StorageError(
+              "CONFLICT",
+              "平台名称已存在，请使用合并平台",
+              409,
+            );
+          const row =
+            mutation.action === "merge"
+              ? target || {
+                  ...defaults("platforms"),
+                  name_key: nextKey,
+                  name: nextName,
+                }
+              : {
+                  ...defaults("platforms"),
+                  ...source,
+                  ...mutation.definition,
+                  updated_at: new Date().toISOString(),
+                };
+          validateRow("platforms", row);
+          if (source && nextKey !== key) remember("platforms", source, true);
+          remember("platforms", row);
+          for (const account of sourceAccounts)
+            remember("platform_vault", {
+              ...account,
+              platform_name: row.name,
+              updated_at: new Date().toISOString(),
+            });
+          for (const mailbox of await find("temp_mailboxes", {
+            field: "associated_platform",
+            op: "ieq",
+            value: mutation.source,
+          }))
+            remember("temp_mailboxes", {
+              ...mailbox,
+              associated_platform: row.name,
+              updated_at: new Date().toISOString(),
+            });
+          result.rows.push(row);
+          result.changes = sourceAccounts.length;
+        }
+      }
+    } else if (mutation.op === "assertAbsent") {
+      if ((await find(mutation.table, mutation.where)).length)
+        throw new StorageError(
+          "STALE_PREVIEW",
+          mutation.message || "记录已变化，请重新预览后重试",
+          409,
+        );
+    } else if (mutation.op === "assertExists") {
       if (
         (await find(mutation.table, mutation.where)).length <
         (mutation.minimum ?? 1)
