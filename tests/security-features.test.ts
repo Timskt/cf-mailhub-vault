@@ -962,3 +962,27 @@ test("backup defaults to redacted data; full export is passphrase-encrypted and 
     400,
   );
 });
+
+test("mailbox identity aggregates stay private and restricted keys authorize actual delivery aliases for every write and target", async () => {
+  const key = await issue(["admin"], { emails: ["login-scope@example.test"], platforms: ["AliasScope"] });
+  const payload = { platform_name: "AliasScope", account_email: "login-scope@example.test", mailbox_address: "private-delivery@example.test", email_source: "cf_domain", verification_sender: "auth@example.test" };
+  const created = await request("/api/vault", payload, { session: true });
+  const id = created.data.data.id;
+  for (const path of [
+    "/api/mailbox-identities",
+    `/api/mailbox-identities/${encodeURIComponent("cf_domain:private-delivery@example.test")}`,
+    `/api/mailbox-identities/${encodeURIComponent("cf_domain:private-delivery@example.test")}/registrations`,
+    `/api/mailbox-identities/${encodeURIComponent("cf_domain:private-delivery@example.test")}/impact`,
+  ]) assert.equal((await request(path, undefined, { key: key.key })).response.status, 403, path);
+  assert.equal((await request("/api/mailbox-identities", undefined, { session: true })).response.status, 200);
+  assert.equal((await request("/api/vault", payload, { key: key.key })).response.status, 403, "create alias");
+  assert.equal((await request("/api/vault/import", { accounts: [payload] }, { key: key.key })).response.status, 403, "import alias");
+  assert.equal((await request("/api/vault/import", { accounts: [{ platform_name: payload.platform_name, account_email: payload.account_email, email_source: "cf_domain", remark: "should stay private" }], duplicate_mode: "update" }, { key: key.key })).response.status, 403, "merge alias");
+  for (const target of [{ vault_id: id }, { platform: payload.platform_name }])
+    assert.equal((await request("/api/automation/verification", target, { key: key.key })).response.status, 403, JSON.stringify(target));
+  const allowed = await issue(["admin"], { emails: [payload.account_email, payload.mailbox_address], platforms: [payload.platform_name] });
+  assert.equal((await request(`/api/vault/${id}`, undefined, { key: allowed.key })).response.status, 200);
+  assert.equal((await request("/api/automation/verification", { vault_id: id, match: "platform" }, { key: allowed.key })).response.status, 200);
+  const updated = await request("/api/vault/import", { accounts: [{ platform_name: payload.platform_name, account_email: payload.account_email, remark: "allowed alias patch" }], duplicate_mode: "update" }, { key: allowed.key });
+  assert.equal(updated.response.status, 200, JSON.stringify(updated.data));
+});
