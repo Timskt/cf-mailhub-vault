@@ -72,3 +72,18 @@ test("platform mode requires a rule; alias delivery is explicit and source ident
     assert.notEqual(identities[0].id, identities[1].id);
   } finally { await f.dispose(); }
 });
+
+test("editing a shared registration preserves a valid manual mailbox representative", async () => {
+  const f = await database();
+  try {
+    const payload = { account_email: "login@example.test", mailbox_address: "shared@example.test", email_source: "cf_domain" };
+    const first = await f.request("/api/vault", { ...payload, platform_name: "First" });
+    const second = await f.request("/api/vault", { ...payload, platform_name: "Second" });
+    const box = (await db(f.env).select("temp_mailboxes"))[0];
+    await f.request(`/api/mailboxes/${box.id}/link-vault`, { vault_id: second.data.data.id });
+    assert.equal((await f.request(`/api/vault/${first.data.data.id}`, { remark: "updated only" }, "PUT")).response.status, 200);
+    assert.equal((await db(f.env).select("temp_mailboxes"))[0].associated_vault_id, second.data.data.id);
+    await f.request(`/api/vault/${second.data.data.id}`, undefined, "DELETE");
+    assert.equal((await db(f.env).select("temp_mailboxes"))[0].associated_vault_id, first.data.data.id);
+  } finally { await f.dispose(); }
+});

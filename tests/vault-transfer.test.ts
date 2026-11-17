@@ -343,6 +343,8 @@ test("extended vault columns append to the original eleven and round trip with T
     assert.deepEqual(result.accounts, [account]);
     assert.deepEqual(result.provided_fields, [columns]);
   }
+  for (const format of ["text", "csv"] as const)
+    assert.deepEqual(parseVaultImport(serializeAccountText([account], "vault", { format })).accounts, [account]);
   const legacy = parseVaultImport(
     serializeDelimited(
       [
