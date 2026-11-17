@@ -134,7 +134,7 @@
           "name": "inspectMailbox · 诊断邮箱接入状态",
           "request": {
             "method": "POST",
-            "description": "按 email、vault_id 或唯一 platform 定位。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：只读；不访问微软",
+            "description": "按 email、vault_id 或唯一 platform 定位。台账使用 mailbox_address（空则 account_email）与 email_source；detached 返回 409 MAILBOX_DETACHED。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：只读；不访问微软",
             "header": [
               {
                 "key": "Content-Type",
@@ -175,7 +175,7 @@
           "name": "lookupVerification · 统一查收验证码与验证链接",
           "request": {
             "method": "POST",
-            "description": "CF 与 Outlook 统一返回 data；outcome=found 或 empty。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：Outlook 会刷新并保存令牌及连接状态；不标已读、不打开链接",
+            "description": "CF、Outlook、Mail.tm/Mail.gw 统一返回 data；outcome=found 或 empty。match 默认为 mailbox，仅表示在邮箱中找到验证信息，不确认归属平台。match=platform 要求 vault_id 或唯一 platform，并按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配；无规则 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。直接 email 使用 platform 模式返回 400 PLATFORM_TARGET_REQUIRED。台账按有效收件地址与来源查收，detached 返回 409 MAILBOX_DETACHED。台账目标额外返回 match_scope/match_reason。保存平台历史验证码前以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码。过滤用于业务匹配，不提供邮件隔离。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：邮箱提供商可刷新令牌及连接状态；仅 match=platform 找到验证码且目标与规则未变时保存平台历史；不标已读、不打开链接",
             "header": [
               {
                 "key": "Content-Type",
@@ -216,7 +216,7 @@
           "name": "batchLookupVerification · 批量查收，逐项报告结果",
           "request": {
             "method": "POST",
-            "description": "每批 1–5 项。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：最多并行 2 个；同一邮箱串行；Outlook 刷新令牌和状态",
+            "description": "每批 1–5 项，各项均支持 match=mailbox|platform（默认 mailbox），目标和规则要求同 lookupVerification。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：最多并行 2 个；同一邮箱串行；Outlook 刷新令牌和状态",
             "header": [
               {
                 "key": "Content-Type",
@@ -245,7 +245,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"items\": [\n    {\n      \"email\": \"user@example.com\",\n      \"since\": \"2026-11-15T00:00:00Z\",\n      \"sender\": \"auth\"\n    },\n    {\n      \"vault_id\": 1,\n      \"since\": \"2026-11-15T00:00:00Z\"\n    }\n  ]\n}",
+              "raw": "{\n  \"items\": [\n    {\n      \"email\": \"user@example.com\",\n      \"since\": \"2026-11-15T00:00:00Z\",\n      \"sender\": \"auth\"\n    },\n    {\n      \"vault_id\": 1,\n      \"match\": \"platform\",\n      \"sender\": \"auth\",\n      \"since\": \"2026-11-15T00:00:00Z\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -258,7 +258,7 @@
           "name": "lookupCodeLegacy · 兼容取码接口",
           "request": {
             "method": "GET",
-            "description": "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：Outlook 刷新令牌及连接状态",
+            "description": "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。无显式 email 时解析唯一 platform，按 mailbox_address（空则 account_email）与 email_source 查收；多账号返回 409 AMBIGUOUS_TARGET，目标不存在返回 404 TARGET_NOT_FOUND，detached 返回 409 MAILBOX_DETACHED。显式 email 始终优先，即使同时传 platform 也保持邮箱范围查询，不应用平台注册的验证规则或 detached 状态。两种目标均仅按本次 since/sender/q 过滤，不更新平台历史验证码。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：Outlook 刷新令牌及连接状态",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/external/code",
@@ -280,13 +280,13 @@
                 {
                   "key": "email",
                   "value": "user@example.com",
-                  "description": "邮箱地址",
+                  "description": "显式邮箱地址优先于 platform，保持邮箱范围查询",
                   "disabled": false
                 },
                 {
                   "key": "platform",
                   "value": "",
-                  "description": "唯一平台名称，email 优先",
+                  "description": "无 email 时解析唯一平台注册，使用 mailbox_address（空则 account_email）与 email_source",
                   "disabled": true
                 },
                 {
@@ -556,7 +556,7 @@
           "name": "listVaultAccounts · 分页筛选平台账号",
           "request": {
             "method": "GET",
-            "description": "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配邮箱且不区分大小写；响应 mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
+            "description": "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配有效收件地址（mailbox_address 空则 account_email）且不区分大小写，email_source 可限定来源。响应含 registration 元数据，login_methods 为 JSON 数组字符串。mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:read\n成功状态：200\n副作用：无业务写入",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/vault",
@@ -589,7 +589,7 @@
                 {
                   "key": "mailbox",
                   "value": "",
-                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页",
                   "disabled": true
                 },
                 {
@@ -643,7 +643,7 @@
           "name": "createVaultAccount · 登记平台账号",
           "request": {
             "method": "POST",
-            "description": "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。现有 CF 邮箱会被关联保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n附加条件：generate_email=true 或未提供非空 account_email 时需要 mailbox:write\n成功状态：200\n副作用：修改业务数据",
+            "description": "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。支持 registration 元数据、登录方式及验证规则。mailbox_address 为空时回退 account_email，别名须显式映射；按有效地址与 email_source 关联并保护 CF 邮件。detached 停止此平台注册自动查收，仍保留保留保护。日期只接受空字符串或含时区 ISO 8601，不推断。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n附加条件：generate_email=true 或未提供非空 account_email 时需要 mailbox:write\n成功状态：200\n副作用：修改业务数据",
             "header": [
               {
                 "key": "Content-Type",
@@ -758,7 +758,7 @@
                 {
                   "key": "mailbox",
                   "value": "",
-                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页",
                   "disabled": true
                 },
                 {
@@ -866,7 +866,7 @@
           "name": "updateVaultAccount · 编辑平台账号",
           "request": {
             "method": "PUT",
-            "description": "沿用现有行为，未提供字段保留原值。更新 CF 关联邮箱保护状态。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "description": "未提供字段保留原值，明确空值可清除可选字段。支持 workspace/account_identifier/login_methods、mailbox_address/mailbox_link_state、验证规则和登记日期。按有效收件地址更新 CF 保护；detached 保留台账及保留保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
             "header": [
               {
                 "key": "Content-Type",
@@ -982,7 +982,7 @@
           "name": "lookupVaultCode · 查收台账账号验证码",
           "request": {
             "method": "GET",
-            "description": "查收台账账号验证码\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：保存最近验证码；Outlook 刷新令牌及状态",
+            "description": "按 mailbox_address（空则 account_email）与 email_source 查收。match 默认 mailbox，返回 match_scope/match_reason，邮箱结果不能确认归属平台；platform 按显式 sender/q 或登记规则匹配，无规则返回 409 VERIFICATION_RULE_REQUIRED。detached 返回 409 MAILBOX_DETACHED；不自动回退整个邮箱。match=platform 找到验证码后，写入 last_code/last_code_at 前在同一事务中以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码，应刷新台账后重新查收。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：verify:read\n成功状态：200\n副作用：仅 match=platform 找到验证码且 CAS 校验通过时保存平台历史；邮箱提供商可刷新令牌及状态",
             "header": [],
             "url": {
               "raw": "{{base_url}}/api/vault/:id/code",
@@ -1012,6 +1012,12 @@
                   "key": "q",
                   "value": "",
                   "description": "邮件关键词",
+                  "disabled": true
+                },
+                {
+                  "key": "match",
+                  "value": "mailbox",
+                  "description": "mailbox 查询有效收件邮箱，不能确认属于某平台且不更新平台历史验证码；platform 仅用于 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配，缺少规则返回 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。",
                   "disabled": true
                 }
               ],
@@ -1057,7 +1063,7 @@
                 {
                   "key": "mailbox",
                   "value": "",
-                  "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+                  "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页",
                   "disabled": true
                 },
                 {
@@ -1111,7 +1117,7 @@
           "name": "previewVaultImport · 脱敏预览平台账号文本导入",
           "request": {
             "method": "POST",
-            "description": "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复，不检查库中已有账号。platform_name 用于补全缺失的平台名。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：只读解析，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
+            "description": "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。结合库中现状及 duplicate_mode（skip|update，默认 skip）、update_mode（merge|replace，默认 merge）计算 rows[].action=create|update|skip、changed_fields 和可选 existing_id；provided_fields 表示输入明确提供的字段。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复。platform_name 用于补全缺失的平台名。预览不锁定库中状态，提交时重新检查。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：只读解析及比对现有账号，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
             "header": [
               {
                 "key": "Content-Type",
@@ -1139,7 +1145,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"raw_text\": \"platform_name----account_email----password----email_source\\nExample----user@example.com----Example-password-42----external\"\n}",
+              "raw": "{\n  \"raw_text\": \"platform_name----account_email----password----email_source\\nExample----user@example.com----Example-password-42----external\",\n  \"duplicate_mode\": \"update\",\n  \"update_mode\": \"merge\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1152,7 +1158,7 @@
           "name": "importVault · 导入平台台账",
           "request": {
             "method": "POST",
-            "description": "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。按不区分大小写的平台名、规范化邮箱及原样用户名识别重复，文件内同身份最后一条生效。duplicate_mode 默认 skip；显式 update 会使用导入记录完整更新已有账号，未提供的可选字段使用默认值。返回 created/updated/skipped 与文件内 duplicate_count；CF 地址自动保护。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
+            "description": "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。重复身份包含不区分大小写的平台名/规范化账号邮箱、原样 username、email_source、workspace、account_identifier 与规范化 login_methods；文件内同身份最后一条生效。accounts[] 省略来源默认 cf_domain；raw_text 省略来源时微软邮箱推断 outlook，其余 external。省略身份字段按默认值精确匹配，不作为通配条件。duplicate_mode 默认 skip；update_mode 默认 merge，仅更新输入明确提供的字段，省略的密码、TOTP 和元数据保留。明确 replace 才将省略可选字段恢复默认；明确空值可清除字段。返回 created/updated/skipped 与文件内 duplicate_count；按有效收件地址保护 CF 邮件。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：vault:write\n成功状态：200\n副作用：修改业务数据",
             "header": [
               {
                 "key": "Content-Type",
@@ -1180,12 +1186,158 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"accounts\": [\n    {\n      \"platform_name\": \"Example\",\n      \"account_email\": \"user@example.com\",\n      \"email_source\": \"cf_domain\"\n    }\n  ]\n}",
+              "raw": "{\n  \"accounts\": [\n    {\n      \"platform_name\": \"Example\",\n      \"account_email\": \"user@example.com\",\n      \"email_source\": \"cf_domain\"\n    }\n  ],\n  \"duplicate_mode\": \"update\",\n  \"update_mode\": \"merge\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
                 }
               }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "邮箱身份",
+      "item": [
+        {
+          "name": "listMailboxIdentities · 分页查询邮箱身份",
+          "request": {
+            "method": "GET",
+            "description": "按来源和有效收件地址聚合已有连接及未接入的平台注册。支持 q/source/page/limit；total 是筛选后的身份数，summary 是全局汇总，不随筛选和分页改变。身份 id 为 source:小写地址，不能使用数字 ID。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。仅 admin grant、主密钥或管理员会话；这是 admin collection，资源受限 Key 一律 403 RESOURCE_SCOPE_REQUIRED，过滤条件不能解锁。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox-identities",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox-identities"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                },
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "地址或关联平台名称，包含匹配",
+                  "disabled": true
+                },
+                {
+                  "key": "source",
+                  "value": "",
+                  "description": "精确邮箱来源",
+                  "disabled": true
+                }
+              ],
+              "variable": []
+            }
+          }
+        },
+        {
+          "name": "getMailboxIdentity · 读取邮箱身份与连接状态",
+          "request": {
+            "method": "GET",
+            "description": "整个 source:address ID 须作为一个路径段 URL 编码。按有效收件地址与来源区分身份；返回登记数量、平台、保留保护及记录的连接健康状态，不返回邮箱凭据。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox-identities/:id",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox-identities",
+                ":id"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "mailtm%3Auser%2Balias%40example.com",
+                  "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "listMailboxIdentityRegistrations · 分页读取邮箱身份的平台注册",
+          "request": {
+            "method": "GET",
+            "description": "整个 source:address ID 须 URL 编码。按 mailbox_address（空则 account_email）与精确 email_source 查询，包括 detached 台账；按 ID 升序分页。summary 汇总此身份全部平台及注册数，不受分页影响。返回 registration 元数据与 mailbox 健康，不含 password/totp_secret。无注册返回空数组。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox-identities/:id/registrations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox-identities",
+                ":id",
+                "registrations"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "页码，从 1 开始",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "30",
+                  "description": "每页条数",
+                  "disabled": true
+                }
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "mailtm%3Auser%2Balias%40example.com",
+                  "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "getMailboxIdentityImpact · 读取邮箱身份关联影响与保护",
+          "request": {
+            "method": "GET",
+            "description": "整个 source:address ID 须 URL 编码。返回 identity、注册总数和保留保护，供变更前核对影响；protected 包含永久邮箱或仍有注册引用，detached 不解除现有保留保护。affected_registrations 排除 detached。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。\n\n认证：API Key 或管理员会话；scope/资源限制适用。\n必要 grants（全部）：admin\n成功状态：200\n副作用：无业务写入",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/mailbox-identities/:id/impact",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "mailbox-identities",
+                ":id",
+                "impact"
+              ],
+              "query": [],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "mailtm%3Auser%2Balias%40example.com",
+                  "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。"
+                }
+              ]
             }
           }
         }
@@ -4504,7 +4656,7 @@
           "name": "getBackupManifest · 查询便携业务备份范围与限制",
           "request": {
             "method": "GET",
-            "description": "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
+            "description": "schema 13 共 13 张业务表，包括独立 platforms（空平台也保留）、provider_accounts（外部邮箱密码与登录令牌）及 platform_vault 的 registration 元数据。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10/11/12 文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：无业务写入",
             "auth": {
               "type": "noauth"
             },
@@ -4596,7 +4748,7 @@
           "name": "dryRunBackup · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。当前 schema 13，兼容已发布的 10/11/12；旧文件先验证冻结的原 schema hash、完整字段、逐表/整体 hash 及业务关联。10 补出 platforms，10/11 补空 provider_accounts；所有旧版本补齐 registration 默认值（login_methods=[\"unknown\"] 的 JSON 字符串、mailbox_link_state=auto，其余为空字符串）并计算 schema 13 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -4640,7 +4792,7 @@
           "name": "previewBackupRestore · 校验备份并预览恢复",
           "request": {
             "method": "POST",
-            "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
+            "description": "dry-run 与 preview 为同一处理器。当前 schema 13，兼容已发布的 10/11/12；旧文件先验证冻结的原 schema hash、完整字段、逐表/整体 hash 及业务关联。10 补出 platforms，10/11 补空 provider_accounts；所有旧版本补齐 registration 默认值（login_methods=[\"unknown\"] 的 JSON 字符串、mailbox_link_state=auto，其余为空字符串）并计算 schema 13 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：不修改业务数据；认证、审计及可选幂等记录仍会更新。",
             "auth": {
               "type": "noauth"
             },
@@ -4684,7 +4836,7 @@
           "name": "restoreBackup · 确认并恢复便携业务备份",
           "request": {
             "method": "POST",
-            "description": "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：替换 12 张业务表（含 platforms）及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+            "description": "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。\n\n认证：仅管理员会话；先登录并使用 Cookie jar，关闭继承的 Bearer。\n必要 grants（全部）：无\n成功状态：200\n副作用：替换 12 张业务表（含 platforms、provider_accounts 和 registration 元数据）及 settings 指定偏好，共 13 表，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
             "auth": {
               "type": "noauth"
             },

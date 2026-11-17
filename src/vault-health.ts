@@ -1,4 +1,5 @@
 import { isMailProvider, type ProviderAccount } from "../shared/mail-providers";
+import { deliveryAddress } from "../shared/registrations";
 import { getDomains, type MailDomain } from "./domains";
 import { collect, db, type Filter } from "./storage/client";
 import type { Env, OutlookAccount, PlatformAccount } from "./types";
@@ -28,7 +29,10 @@ export interface MailboxHealth {
   account_id?: number;
   checked_at?: string;
 }
-type MailReference = Pick<PlatformAccount, "account_email" | "email_source">;
+type MailReference = Pick<
+  PlatformAccount,
+  "account_email" | "email_source" | "mailbox_address" | "mailbox_link_state"
+>;
 type OutlookHealth = Pick<
   OutlookAccount,
   | "id"
@@ -49,6 +53,8 @@ export type VaultSummaryRow = Pick<
   | "category"
   | "is_pinned"
   | "updated_at"
+  | "mailbox_address"
+  | "mailbox_link_state"
 >;
 export type EnrichedVault<T> = T & {
   mailbox: MailboxHealth;
@@ -284,24 +290,33 @@ export async function enrichVault<T extends MailReference & { status: string }>(
     providers.map((p) => [`${p.provider}:${p.address.toLowerCase()}`, p]),
   );
   return rows.map((row) => {
-    const address = row.account_email.toLowerCase();
+    const address = deliveryAddress(row);
     const mailbox: MailboxHealth =
-      row.email_source === "outlook"
-        ? outlookHealth(accounts.get(address))
-        : row.email_source === "cf_domain"
-          ? domainHealth(mailDomains.get(address.split("@")[1]))
-          : isMailProvider(row.email_source)
-            ? providerHealth(
-                providerAccounts.get(`${row.email_source}:${address}`),
-              )
-            : {
-                state: "external",
-                label: "外部邮箱 · 手动查收",
-                message: "该邮箱来源暂不支持自动收件，请在邮箱服务商处查收。",
-                needs_attention: false,
-                can_lookup: false,
-                action: null,
-              };
+      row.mailbox_link_state === "detached"
+        ? {
+            state: "missing",
+            label: "收件连接已解除",
+            message: "平台注册和登录邮箱保留，重新关联收件来源后可查收。",
+            needs_attention: true,
+            can_lookup: false,
+            action: null,
+          }
+        : row.email_source === "outlook"
+          ? outlookHealth(accounts.get(address))
+          : row.email_source === "cf_domain"
+            ? domainHealth(mailDomains.get(address.split("@")[1]))
+            : isMailProvider(row.email_source)
+              ? providerHealth(
+                  providerAccounts.get(`${row.email_source}:${address}`),
+                )
+              : {
+                  state: "external",
+                  label: "外部邮箱 · 手动查收",
+                  message: "该邮箱来源暂不支持自动收件，请在邮箱服务商处查收。",
+                  needs_attention: false,
+                  can_lookup: false,
+                  action: null,
+                };
     return {
       ...row,
       mailbox,
@@ -331,6 +346,8 @@ export async function vaultInventory(env: Env, where?: Filter) {
       "category",
       "is_pinned",
       "updated_at",
+      "mailbox_address",
+      "mailbox_link_state",
     ],
     where,
     order: [["id", "asc"]],

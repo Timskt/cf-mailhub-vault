@@ -85,6 +85,28 @@ const VAULT_COLUMNS: readonly AccountTextColumn[] = [
   },
   { key: "proxy_node", label: "代理节点", example: "direct" },
   { key: "remark", label: "备注", example: "示例账号" },
+  { key: "workspace", label: "工作区", example: "个人" },
+  { key: "account_identifier", label: "账号标识", example: "workspace-id" },
+  { key: "login_methods", label: "登录方式", example: '["password"]' },
+  {
+    key: "mailbox_address",
+    label: "实际收件地址",
+    example: "delivery@example.com",
+  },
+  { key: "mailbox_link_state", label: "邮箱关联状态", example: "auto" },
+  {
+    key: "verification_sender",
+    label: "验证码发件人",
+    example: "auth@example.com",
+  },
+  { key: "verification_keyword", label: "验证码关键词", example: "GitHub" },
+  { key: "registered_at", label: "登记日期", example: "2026-01-01T00:00:00Z" },
+  {
+    key: "last_verified_at",
+    label: "最近核验",
+    example: "2026-01-01T00:00:00Z",
+  },
+  { key: "expires_at", label: "到期时间", example: "2026-12-31T00:00:00Z" },
 ];
 
 const columnsByKind: Record<AccountTextKind, readonly AccountTextColumn[]> = {

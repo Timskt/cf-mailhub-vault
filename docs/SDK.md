@@ -1,25 +1,29 @@
 # TypeScript 与 Python SDK
 
-仓库提供 API 2.2 的服务端客户端，分别位于 `sdk/typescript/` 和 `sdk/python/mailhub.py`，不依赖第三方运行库。TypeScript 使用原生 Fetch/Web Crypto，推荐 Node.js 22+；Python 使用标准库，要求 Python 3.10+。目前按源码分发，尚未发布 npm/PyPI 包。
+仓库提供 API 2.5.0 的服务端客户端，分别位于 `sdk/typescript/` 和 `sdk/python/mailhub.py`，不依赖第三方运行库。TypeScript 使用原生 Fetch/Web Crypto，推荐 Node.js 22+；Python 使用标准库，要求 Python 3.10+。目前按源码分发，尚未发布 npm/PyPI 包。
 
 在「设置 → 凭据与密钥」创建自动化密钥，通过运行环境的 `MAILHUB_API_KEY` 注入。查收只需 `verify:read`；自动登记需要 `mailbox:write` 和 `vault:write`。Outlook 发送接口需要业务管理权限及对应微软账号的 `Mail.Send` 授权。限制到具体邮箱/平台的密钥还需满足接口资源策略。
 
 ## 方法与返回值
 
-| TypeScript | Python | 用途 |
-| --- | --- | --- |
-| `inspectMailbox(target)` | `inspect_mailbox(target)` | 查询接入与最近健康状态，不触发微软实时检查 |
-| `lookupVerification(target)` | `lookup_verification(target)` | 单次查收验证码或验证链接 |
-| `waitForVerification(target, options)` | `wait_for_verification(target, **options)` | 固定时间起点、有限时长地等待新邮件 |
-| `register(input, options)` | `register(input, **options)` | 分配邮箱并登记平台账号 |
-| `sendMail(accountId, input, options)` | `send_mail(account_id, input, **options)` | 明确提交一次发送请求 |
-| `reply(accountId, messageId, input, options)` | `reply(account_id, message_id, input, **options)` | 回复指定微软邮件 |
-| `request(method, path, options)` | `request(method, path, **options)` | 调用其他 JSON 信封接口 |
-| `verifyWebhook(rawBody, headers, options)` | `verify_webhook(raw_body, headers, **options)` | 验证原始字节、时间戳、事件类型和投递标识 |
+| TypeScript                                    | Python                                            | 用途                                       |
+| --------------------------------------------- | ------------------------------------------------- | ------------------------------------------ |
+| `inspectMailbox(target)`                      | `inspect_mailbox(target)`                         | 查询接入与最近健康状态，不触发微软实时检查 |
+| `lookupVerification(target)`                  | `lookup_verification(target)`                     | 单次查收验证码或验证链接                   |
+| `waitForVerification(target, options)`        | `wait_for_verification(target, **options)`        | 固定时间起点、有限时长地等待新邮件         |
+| `register(input, options)`                    | `register(input, **options)`                      | 分配邮箱并登记平台账号                     |
+| `sendMail(accountId, input, options)`         | `send_mail(account_id, input, **options)`         | 明确提交一次发送请求                       |
+| `reply(accountId, messageId, input, options)` | `reply(account_id, message_id, input, **options)` | 回复指定微软邮件                           |
+| `request(method, path, options)`              | `request(method, path, **options)`                | 调用其他 JSON 信封接口                     |
+| `verifyWebhook(rawBody, headers, options)`    | `verify_webhook(raw_body, headers, **options)`    | 验证原始字节、时间戳、事件类型和投递标识   |
 
 单次请求返回 `data`、HTTP `status`、`request_id`、`retry_after`、`idempotency_replayed` 和 `idempotency_key_expires_at`。异常类型 `MailHubError` 保留 `code`、`status`、`request_id`、`retry_after`、`retryable` 和结构化 `details`，不把底层网络异常中的地址或凭据原样输出。
 
-`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain" | "mailtm" | "mailgw"`。查收还支持 `since`、`sender` 和 `q`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
+`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain" | "mailtm" | "mailgw"`。查收还支持 `since`、`sender`、`q` 和 `match`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
+
+`match` 默认为 `mailbox`，查询邮箱中符合筛选条件的验证信息，不确认平台归属，也不更新平台注册的历史验证码。`match: "platform"` 仅接受 `vault_id` 或唯一匹配的 `platform`，优先使用显式 `sender/q`，未提供的规则取登记中的 `verification_sender/verification_keyword`。两项规则都为空时返回 HTTP 409 / `VERIFICATION_RULE_REQUIRED`，应先配置规则，或由调用方明确改为邮箱范围查询。台账目标的响应包含 `match_scope/match_reason`；共享同一邮箱的不同平台应使用各自的登记 ID 和匹配规则。
+
+登记设置了 `mailbox_address` 时按这个实际收件地址查询；空值才使用登录邮箱。`mailbox_link_state: "detached"` 返回 HTTP 409 / `MAILBOX_DETACHED`。平台取码期间若登记或规则发生变化，历史码更新被拒绝并返回 HTTP 409 / `STALE_PREVIEW`，刷新登记后再查收。
 
 ## TypeScript
 
@@ -86,6 +90,41 @@ except MailHubError as error:
 ```
 
 `register/send_mail/reply` 接受 `idempotency_key="业务侧保存的标识"`。Python 是同步客户端；取消或超时会停止调用方等待，但底层请求可能已经提交。后台 urllib 线程在网络超时后退出，不保证取消已经到达服务端的写入。
+
+## 邮箱资产与共享登记
+
+通过 `request()` 调用邮箱资产查询接口：列表为 `/api/mailbox-identities`，单个身份的详情、登记和影响范围分别为 `/api/mailbox-identities/{id}`、`/{id}/registrations`、`/{id}/impact`。这些管理接口要求无邮箱/平台资源限制的 `admin` 密钥；受限密钥不能枚举邮箱身份及其共享登记。
+
+身份 ID 为 `source:address`，作为路径段时整体编码。使用服务端列表返回的 ID，保持来源与实际收件地址对应；例如 `outlook:user@outlook.com`：
+
+```ts
+const identityId = encodeURIComponent("outlook:user@outlook.com");
+const registrations = await client.request(
+  "GET",
+  `/api/mailbox-identities/${identityId}/registrations`,
+  { query: { page: 1, limit: 30 } },
+);
+
+// vault_id 使用登记列表中的目标 ID；该登记需已配置匹配规则。
+const verification = await client.lookupVerification({
+  vault_id: 42,
+  match: "platform",
+});
+```
+
+```python
+from urllib.parse import quote
+
+identity_id = quote("outlook:user@outlook.com", safe="")
+registrations = client.request(
+    "GET",
+    f"/api/mailbox-identities/{identity_id}/registrations",
+    query={"page": 1, "limit": 30},
+)
+verification = client.lookup_verification({"vault_id": 42, "match": "platform"})
+```
+
+列表与登记接口支持 `page/limit`，应按响应中的 `total` 继续分页。邮箱资产不返回平台密码或 2FA；编辑凭据仍使用台账详情与编辑接口。完整参数和权限见 [API 文档](API.md)，字段含义见 [平台账号](PLATFORM-ACCOUNTS.md)。
 
 ## 轮询、重试和网络规则
 

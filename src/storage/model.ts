@@ -1,3 +1,4 @@
+import { registrationDefaults } from "../../shared/registrations";
 export type Value = string | number | null;
 export type Row = Record<string, Value>;
 const stamp = "$now";
@@ -135,6 +136,7 @@ export const schema = {
     },
   },
   platform_vault: numbered({
+    ...registrationDefaults,
     platform_name: "",
     platform_url: "",
     account_email: "",
@@ -294,6 +296,7 @@ export type Table = keyof typeof schema;
 // Older portable datasets have no physical ALTER TABLE. Keep queries and returned
 // rows consistent without rewriting their contents or changing snapshot hashes.
 export const readFallbacks: Partial<Record<Table, Row>> = {
+  platform_vault: { ...registrationDefaults },
   oauth_sessions: { context: "{}" },
   accounts: { refresh_token_fingerprint: "" },
   cf_inbox_mails: {

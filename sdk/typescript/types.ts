@@ -8,7 +8,11 @@ export type Target =
     }
   | { vault_id: number; email?: never; platform?: never; source?: never }
   | { platform: string; email?: never; vault_id?: never; source?: never };
-export type VerificationRequest = Target & {
+/** Default match is mailbox; platform scope requires a registration target and a sender/keyword rule. */
+export type VerificationRequest = (
+  | (Extract<Target, { email: string }> & { match?: "mailbox" })
+  | (Exclude<Target, { email: string }> & { match?: "mailbox" | "platform" })
+) & {
   since?: string;
   sender?: string;
   q?: string;
@@ -31,6 +35,9 @@ export interface Verification {
   scanned?: number;
   checked_at?: string;
   limited?: boolean;
+  /** Present for registration targets; mailbox results do not establish platform ownership. */
+  match_scope?: "mailbox" | "platform";
+  match_reason?: string;
 }
 export interface MailboxInspection {
   email: string;

@@ -11,7 +11,8 @@ export interface Workspace {
   revision: number;
   refresh: () => void;
   navigate: (page: PageName, query?: string) => void;
-  vault: (draft: Partial<Vault>) => void;
+  vault: (draft: Partial<Vault>, section?: "verification") => void;
+  identity: (target: { address: string; source: string }) => void;
   outlook: (id: number, email: string) => void;
   repairOutlook: (target: OutlookRecoveryTarget) => void;
   mail: (id: number) => void;

@@ -6,8 +6,11 @@ import { createApiKey } from "../src/api-keys";
 import {
   openBackup,
   validateBackup,
+  type LegacyBackupDocument,
   type Schema11BackupDocument,
+  type Schema12BackupDocument,
 } from "../src/routes/backups";
+import { registrationDefaults } from "../shared/registrations";
 import { digest } from "../src/storage/model";
 import { operations, schemas } from "../shared/api-contract";
 import Ajv from "ajv";
@@ -549,12 +552,94 @@ test("editing during a slow provider request cannot restore stale token or overw
   }
 });
 
-test("encrypted backups carry provider credentials and released schema 11 upgrades deterministically without provider rows", async () => {
+test("registration metadata resolves a provider alias and keeps mailbox and platform verification scopes distinct", async () => {
+  const f = await database();
+  try {
+    await provider(async () => {
+      await connect(f);
+      const created = await f.request("/api/vault", {
+        platform_name: "Alias app",
+        account_email: "login@separate.test",
+        email_source: "mailtm",
+        mailbox_address: address,
+        workspace: "Team",
+        account_identifier: "member-42",
+        login_methods: ["google", "password"],
+        verification_sender: "auth@example.test",
+        verification_keyword: "verification",
+        registered_at: "2026-11-15T08:00:00+08:00",
+        expires_at: "",
+      });
+      assert.equal(created.response.status, 200, JSON.stringify(created.data));
+      const id = created.data.data.id;
+      const detail = await f.request(`/api/vault/${id}`);
+      conforms("getVaultAccount", detail.data);
+      assert.equal(detail.data.data.login_methods, '["google","password"]');
+      assert.equal(detail.data.data.registered_at, "2026-11-15T00:00:00.000Z");
+      const mailbox = await f.request("/api/automation/verification", {
+        vault_id: id,
+        match: "mailbox",
+      });
+      conforms("lookupVerification", mailbox.data);
+      assert.equal(mailbox.data.data.email, address);
+      assert.equal(mailbox.data.data.match_scope, "mailbox");
+      assert.equal(
+        (await f.request(`/api/vault/${id}`)).data.data.last_code,
+        "",
+      );
+      const platform = await f.request(`/api/vault/${id}/code?match=platform`);
+      conforms("lookupVaultCode", platform.data);
+      assert.equal(platform.data.data.match_scope, "platform");
+      assert.match(platform.data.data.match_reason, /auth@example.test/);
+      assert.equal(
+        (await f.request(`/api/vault/${id}`)).data.data.last_code,
+        "238641",
+      );
+      const direct = await f.request("/api/automation/verification", {
+        email: address,
+        source: "mailtm",
+        match: "platform",
+      });
+      assert.equal(direct.response.status, 400);
+      assert.equal(direct.data.error, "PLATFORM_TARGET_REQUIRED");
+      await f.request(
+        `/api/vault/${id}`,
+        { verification_sender: "", verification_keyword: "" },
+        "PUT",
+      );
+      const unconfigured = await f.request(
+        `/api/vault/${id}/code?match=platform`,
+      );
+      assert.equal(unconfigured.response.status, 409);
+      assert.equal(unconfigured.data.error, "VERIFICATION_RULE_REQUIRED");
+      await f.request(
+        `/api/vault/${id}`,
+        { mailbox_link_state: "detached" },
+        "PUT",
+      );
+      const detached = await f.request("/api/automation/verification", {
+        vault_id: id,
+        match: "mailbox",
+      });
+      assert.equal(detached.response.status, 409);
+      assert.equal(detached.data.error, "MAILBOX_DETACHED");
+    });
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("schema 13 backups carry provider credentials and frozen schemas 10/11/12 upgrade deterministically", async () => {
   const f = await database();
   f.env.CREDENTIAL_ENCRYPTION_KEY = "e".repeat(40);
   try {
     await provider(async () => {
       await connect(f);
+    });
+    await f.request("/api/vault", {
+      platform_name: "Backup app",
+      account_email: address,
+      email_source: "mailtm",
     });
     const login = await f.request(
       "/api/auth/login",
@@ -578,7 +663,7 @@ test("encrypted backups carry provider credentials and released schema 11 upgrad
     );
     assert.equal(response.response.status, 200, JSON.stringify(response.data));
     const backup = await openBackup(response.data, secret);
-    assert.equal(backup.manifest.schema_version, 12);
+    assert.equal(backup.manifest.schema_version, 13);
     assert.equal(backup.tables.provider_accounts[0].password, password);
     const redacted = await f.request(
       "/api/backups/export",
@@ -588,30 +673,82 @@ test("encrypted backups carry provider credentials and released schema 11 upgrad
     );
     assert.equal(JSON.stringify(redacted.data).includes(password), false);
     assert.equal(JSON.stringify(redacted.data).includes(token), false);
+    conforms("exportRedactedBackup", redacted.data);
     await validateBackup(redacted.data);
     const manifest = (
       await f.request("/api/backups/manifest", undefined, "GET", headers)
     ).data.data;
-    const oldSchema = { ...manifest.schema };
-    delete oldSchema.provider_accounts;
-    const { provider_accounts: _providers, ...tables } = backup.tables;
-    const old = {
-      manifest: {
-        ...backup.manifest,
-        schema_version: 11,
-        schema_hash: await digest(oldSchema),
-        data_hash: await digest(tables),
-        table_counts: { ...backup.manifest.table_counts },
-        table_hashes: { ...backup.manifest.table_hashes },
-      },
-      tables,
-    } as Schema11BackupDocument;
-    delete old.manifest.table_counts.provider_accounts;
-    delete old.manifest.table_hashes.provider_accounts;
-    const converted = await validateBackup(old);
-    assert.deepEqual(converted.tables.provider_accounts, []);
-    assert.deepEqual(converted.tables.platforms, backup.tables.platforms);
-    assert.deepEqual(await validateBackup(old), converted);
+    for (const version of [10, 11, 12] as const) {
+      const oldSchema = structuredClone(manifest.schema);
+      oldSchema.platform_vault.fields =
+        "account_email category created_at email_source id is_pinned last_code last_code_at password platform_name platform_url proxy_node remark status totp_secret updated_at username".split(
+          " ",
+        );
+      if (version < 12) delete oldSchema.provider_accounts;
+      if (version < 11) delete oldSchema.platforms;
+      const tables = Object.fromEntries(
+        Object.entries(backup.tables)
+          .filter(([table]) => table in oldSchema)
+          .map(([table, rows]) => [
+            table,
+            rows.map((row) =>
+              Object.fromEntries(
+                oldSchema[table].fields.map((field: string) => [
+                  field,
+                  row[field],
+                ]),
+              ),
+            ),
+          ]),
+      );
+      const old = {
+        manifest: {
+          ...backup.manifest,
+          schema_version: version,
+          schema_hash: await digest(oldSchema),
+          data_hash: await digest(tables),
+          table_counts: Object.fromEntries(
+            Object.entries(tables).map(([table, rows]) => [table, rows.length]),
+          ),
+          table_hashes: Object.fromEntries(
+            await Promise.all(
+              Object.entries(tables).map(async ([table, rows]) => [
+                table,
+                await digest(rows),
+              ]),
+            ),
+          ),
+        },
+        tables,
+      } as
+        LegacyBackupDocument | Schema11BackupDocument | Schema12BackupDocument;
+      const schemaName =
+        version === 10
+          ? "LegacyBackupDocument"
+          : `Schema${version}BackupDocument`;
+      const ajv = new Ajv({ strict: false, allErrors: true });
+      addFormats(ajv);
+      const validate = ajv.compile({
+        $ref: `#/components/schemas/${schemaName}`,
+        components: { schemas },
+      });
+      assert.equal(validate(old), true, JSON.stringify(validate.errors));
+      const converted = await validateBackup(old);
+      assert.equal(converted.manifest.schema_version, 13);
+      assert.deepEqual(
+        converted.tables.provider_accounts,
+        version === 12 ? backup.tables.provider_accounts : [],
+      );
+      if (version !== 10)
+        assert.deepEqual(converted.tables.platforms, backup.tables.platforms);
+      for (const [field, fallback] of Object.entries(registrationDefaults))
+        assert.equal(
+          converted.tables.platform_vault[0][field],
+          fallback,
+          `${version}: ${field}`,
+        );
+      assert.deepEqual(await validateBackup(old), converted);
+    }
   } finally {
     await f.dispose();
   }

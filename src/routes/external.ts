@@ -22,20 +22,21 @@ app.get("/code", async (c) => {
   if (source && !address) invalid("source 只用于明确的 email 目标");
   const platform = text(c.req.query("platform"), "平台名称", 100).trim();
   if (!address && platform) {
-    const matches = {
-      results: await db(c.env).select<{
-        account_email: string;
-        email_source: string;
-      }>("platform_vault", {
-        where: { field: "platform_name", op: "ieq", value: platform },
-        order: [["id", "desc"]],
-        limit: 2,
-      }),
-    };
-    if (matches.results.length > 1)
-      invalid("该平台绑定了多个账号，请提供 email 精确指定");
-    address = matches.results[0]?.account_email || "";
-    source = matches.results[0]?.email_source || "";
+    try {
+      const target = await resolveTarget(
+        c.env,
+        {
+          platform,
+          source: undefined,
+        },
+        c.get("auth"),
+      );
+      address = target.email;
+      source = target.source;
+    } catch (error) {
+      if (!(error instanceof AutomationError)) throw error;
+      return c.json(automationError(error), error.status as 400);
+    }
   }
   if (!address) invalid("请提供 email 或唯一的 platform");
   if (!source) {

@@ -113,6 +113,13 @@ function target(value: Target) {
 }
 function verificationInput(value: VerificationRequest) {
   target(value);
+  if (
+    value.match !== undefined &&
+    !["mailbox", "platform"].includes(value.match)
+  )
+    invalid("match must be mailbox or platform");
+  if (value.match === "platform" && value.email !== undefined)
+    invalid("match=platform requires vault_id or platform");
   if (value.since !== undefined) iso(value.since);
   for (const [field, max] of [
     ["sender", 254],

@@ -19,6 +19,7 @@ import {
 } from "@/components/common";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Card,
   CardContent,
@@ -175,6 +176,15 @@ export function VerificationLookup({
   onSettled?: () => void;
 }) {
   const w = useWorkspace();
+  const vaultId = path.match(/^\/api\/vault\/(\d+)\/code(?:\?|$)/)?.[1];
+  const [scope, setScope] = useState<"platform" | "mailbox">("platform");
+  const lookupPath = (() => {
+    if (!vaultId) return path;
+    const [base, params] = path.split("?");
+    const search = new URLSearchParams(params);
+    search.set("match", scope);
+    return `${base}?${search}`;
+  })();
   const outlookId = path.match(
     /^\/api\/outlook\/accounts\/(\d+)\/code(?:\?|$)/,
   )?.[1];
@@ -189,7 +199,7 @@ export function VerificationLookup({
   });
   const [watchKey, setWatchKey] = useState(0);
   const r = useSmartPolling<Code>(
-    `${path}${path.includes("?") ? "&" : "?"}${query(filters)}`,
+    `${lookupPath}${lookupPath.includes("?") ? "&" : "?"}${query(filters)}`,
     {
       // Vault lookups publish their result via onSettled(w.refresh). Feeding
       // that revision back into the same lookup would create a request loop.
@@ -208,6 +218,8 @@ export function VerificationLookup({
   );
   const waiting = r.enabled;
   const result = r.result?.data;
+  const ruleRequired =
+    !!vaultId && r.errorCode === "VERIFICATION_RULE_REQUIRED";
   useEffect(() => {
     if (watchKey) r.start();
   }, [watchKey, r.start]);
@@ -228,6 +240,24 @@ export function VerificationLookup({
   };
   return (
     <div className="flex min-w-0 flex-col gap-4">
+      {vaultId && scope === "mailbox" && (
+        <Alert>
+          <AlertTitle>正在查整个邮箱</AlertTitle>
+          <AlertDescription>
+            此结果可能属于其它平台，尚未确认是当前平台注册的验证码。
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                r.stop();
+                setScope("platform");
+              }}
+            >
+              返回平台匹配
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Pick
           label="验证码时间范围"
@@ -341,7 +371,43 @@ export function VerificationLookup({
       )}
       {r.error ? (
         <div className="flex flex-col items-start gap-3">
-          <ErrorState message={r.error} retry={() => startQuery()} />
+          {ruleRequired ? (
+            <Alert>
+              <AlertTitle>先配置此平台的取码规则</AlertTitle>
+              <AlertDescription>{r.error}</AlertDescription>
+            </Alert>
+          ) : (
+            <ErrorState message={r.error} retry={() => startQuery()} />
+          )}
+          {vaultId && (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  r.stop();
+                  w.vault({ id: Number(vaultId) }, "verification");
+                }}
+              >
+                配置平台取码规则
+              </Button>
+              {scope === "platform" && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    r.stop();
+                    setScope("mailbox");
+                  }}
+                >
+                  查整个邮箱
+                </Button>
+              )}
+              {ruleRequired && (
+                <Button variant="ghost" onClick={() => startQuery()}>
+                  已配置，重新查收
+                </Button>
+              )}
+            </div>
+          )}
           {outlookId && (
             <Button
               variant="outline"
@@ -367,7 +433,11 @@ export function VerificationLookup({
               <div className="flex flex-wrap items-center gap-3">
                 <Badge variant="secondary">
                   <KeyRound data-icon="inline-start" />
-                  {result.code ? "识别到验证码" : "识别到验证链接"}
+                  {vaultId && scope === "mailbox"
+                    ? "邮箱结果 · 需核对平台"
+                    : result.code
+                      ? "识别到验证码"
+                      : "识别到验证链接"}
                 </Badge>
                 {result.code && (
                   <strong className="break-all font-mono text-2xl tracking-widest">
@@ -415,6 +485,11 @@ export function VerificationLookup({
       <p className="text-xs text-muted-foreground">
         按收件时间返回最新匹配项，是否仍有效以目标平台为准。验证链接由你选择打开。
       </p>
+      {result?.match_reason && (
+        <p className="text-xs text-muted-foreground">
+          匹配依据：{result.match_reason}
+        </p>
+      )}
     </div>
   );
 }

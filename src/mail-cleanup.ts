@@ -1,5 +1,6 @@
 import { and, collect, db, eq, oneOf, or, type Filter } from "./storage/client";
 import type { Env } from "./types";
+import { deliveryAddress } from "../shared/registrations";
 export async function cleanMail(env: Env, days?: number) {
   const store = db(env);
   const [boxes, vaults] = await Promise.all([
@@ -8,13 +9,17 @@ export async function cleanMail(env: Env, days?: number) {
     }),
     collect(store, "platform_vault", {
       where: eq("email_source", "cf_domain"),
-      columns: ["account_email"],
+      columns: ["account_email", "mailbox_address"],
     }),
   ]);
   const protectedAddresses = [
     ...new Set([
       ...boxes.filter((b) => b.is_permanent).map((b) => b.address),
-      ...vaults.map((v) => v.account_email),
+      ...vaults.map((v) =>
+        deliveryAddress(
+          v as { account_email: string; mailbox_address?: string },
+        ),
+      ),
     ]),
   ];
   const expiredAddresses = boxes

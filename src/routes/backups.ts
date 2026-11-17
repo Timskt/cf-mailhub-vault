@@ -1,4 +1,5 @@
 import { isMailProvider } from "../../shared/mail-providers";
+import { registrationDefaults } from "../../shared/registrations";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import {
@@ -31,6 +32,7 @@ import {
 } from "../storage/coordinator";
 import { encryptCredentialRows } from "../storage/secure";
 import type { Env } from "../types";
+import { validateVaultAccount } from "../vault-import";
 import { email, httpUrl, integer, invalid, object, text } from "../validation";
 
 export const BACKUP_MAX_BYTES = 1024 * 1024;
@@ -123,9 +125,18 @@ const SCHEMA_11 = {
       ),
   },
 };
-const LEGACY_BACKUP_TABLES = Object.keys(
-  LEGACY_BACKUP_SCHEMA,
-) as LegacyBackupTable[];
+// Frozen schema 12 is the released schema 10 projection plus platforms and
+// provider accounts. Registration metadata belongs to schema 13 only.
+const SCHEMA_12 = {
+  ...SCHEMA_11,
+  provider_accounts: {
+    key: ["id"],
+    fields:
+      "address auth_status created_at credential_version id last_checked_at last_error last_error_code password provider remark remote_id status token token_expires_at updated_at".split(
+        " ",
+      ),
+  },
+};
 const PREFERENCES = BACKUP_PREFERENCES;
 const EXCLUDED = [
   "administrator/session secrets",
@@ -236,10 +247,27 @@ const REDACTED: Record<BackupTable, readonly string[]> = {
     "updated_at",
   ],
 };
+// Schema 10/11/12 redacted files retain their original platform projection.
+const REDACTED_SCHEMA_13: Record<BackupTable, readonly string[]> = {
+  ...REDACTED,
+  platform_vault: [
+    ...REDACTED.platform_vault,
+    "workspace",
+    "account_identifier",
+    "login_methods",
+    "mailbox_address",
+    "mailbox_link_state",
+    "verification_sender",
+    "verification_keyword",
+    "registered_at",
+    "last_verified_at",
+    "expires_at",
+  ],
+};
 export interface BackupManifest {
   format: typeof FORMAT;
   version: 1;
-  schema_version: 12;
+  schema_version: 13;
   schema_hash: string;
   created_at: string;
   redacted: boolean;
@@ -262,6 +290,10 @@ export interface LegacyBackupDocument {
 export interface Schema11BackupDocument {
   manifest: Omit<BackupManifest, "schema_version"> & { schema_version: 11 };
   tables: Omit<BackupDocument["tables"], "provider_accounts">;
+}
+export interface Schema12BackupDocument {
+  manifest: Omit<BackupManifest, "schema_version"> & { schema_version: 12 };
+  tables: BackupDocument["tables"];
 }
 export interface EncryptedBackup {
   format: "mailhub-backup-encrypted";
@@ -330,7 +362,7 @@ async function encryptionKey(secret: string, salt: Uint8Array<ArrayBuffer>) {
     ["encrypt", "decrypt"],
   );
 }
-async function backupSchema(version: 10 | 11 | 12 = 12): Promise<
+async function backupSchema(version: 10 | 11 | 12 | 13 = 13): Promise<
   Record<
     string,
     {
@@ -341,6 +373,7 @@ async function backupSchema(version: 10 | 11 | 12 = 12): Promise<
 > {
   if (version === 10) return LEGACY_BACKUP_SCHEMA;
   if (version === 11) return SCHEMA_11;
+  if (version === 12) return SCHEMA_12;
   return Object.fromEntries(
     BACKUP_TABLES.map((table) => [
       table,
@@ -382,7 +415,7 @@ async function snapshot(env: Env, redacted: boolean) {
     for (let offset = 0; ; offset += 25) {
       const page = await store.select(table, {
         ...(table === "settings" ? { where: oneOf("key", PREFERENCES) } : {}),
-        ...(redacted ? { columns: [...REDACTED[table]] } : {}),
+        ...(redacted ? { columns: [...REDACTED_SCHEMA_13[table]] } : {}),
         order: schema[table].key.map((field) => [field, "asc"]),
         limit: 25,
         offset,
@@ -423,7 +456,7 @@ async function snapshot(env: Env, redacted: boolean) {
     manifest: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 12,
+      schema_version: 13,
       schema_hash: await digest(await backupSchema()),
       created_at: new Date().toISOString(),
       redacted,
@@ -441,7 +474,11 @@ async function snapshot(env: Env, redacted: boolean) {
   return { document, revision: end };
 }
 export async function sealBackup(
-  document: BackupDocument | LegacyBackupDocument | Schema11BackupDocument,
+  document:
+    | BackupDocument
+    | LegacyBackupDocument
+    | Schema11BackupDocument
+    | Schema12BackupDocument,
   secret: string,
 ): Promise<EncryptedBackup> {
   bounded(document);
@@ -533,7 +570,12 @@ const flagFields = new Set([
   "pin",
 ]);
 
-function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
+function validateBusinessRow(
+  table: BackupTable,
+  row: Row,
+  redacted: boolean,
+  version: 10 | 11 | 12 | 13,
+) {
   validateRow(table, row);
   for (const [field, value] of Object.entries(row)) {
     const expected = (schema[table].fields as Row)[field];
@@ -615,6 +657,17 @@ function validateBusinessRow(table: BackupTable, row: Row, redacted: boolean) {
       httpUrl(row.url);
       text(row.remark, "平台备注", 4000);
     }
+  }
+  if (table === "platform_vault" && version === 13) {
+    // Reuse only the registration validators. Historical credentials, URLs,
+    // manual states and nullable 2FA fields keep their existing backup rules.
+    validateVaultAccount({
+      platform_name: "Backup metadata",
+      account_email: "backup@example.test",
+      ...Object.fromEntries(
+        Object.keys(registrationDefaults).map((field) => [field, row[field]]),
+      ),
+    });
   }
   if (table === "provider_accounts") {
     if (
@@ -712,7 +765,7 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
     "external_dependencies",
   ]);
   const version = manifest.schema_version;
-  if (version !== 10 && version !== 11 && version !== 12)
+  if (version !== 10 && version !== 11 && version !== 12 && version !== 13)
     invalid("备份格式或 schema 版本不兼容");
   const model = await backupSchema(version);
   const included = Object.keys(model) as BackupTable[];
@@ -755,11 +808,15 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
       );
     const keys = new Set<string>(),
       unique = schema[table].unique.map(() => new Set<string>());
-    const fields = manifest.redacted ? REDACTED[table] : model[table].fields;
+    const fields = manifest.redacted
+      ? version === 13
+        ? REDACTED_SCHEMA_13[table]
+        : REDACTED[table]
+      : model[table].fields;
     for (const item of rows) {
       const row = object(item) as Row;
       exactKeys(row, fields);
-      validateBusinessRow(table, row, manifest.redacted);
+      validateBusinessRow(table, row, manifest.redacted, version);
       const key = rowKey(table, row);
       if (keys.has(key)) invalid("备份包含重复主键");
       keys.add(key);
@@ -783,7 +840,10 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
   )
     invalid("备份整体哈希不匹配");
   const typed = document as unknown as
-      BackupDocument | LegacyBackupDocument | Schema11BackupDocument,
+      | BackupDocument
+      | LegacyBackupDocument
+      | Schema11BackupDocument
+      | Schema12BackupDocument,
     t = typed.tables;
   const has = (table: LegacyBackupTable, id: unknown) =>
     t[table].some((row) => row.id === id);
@@ -801,39 +861,72 @@ export async function validateBackup(value: unknown): Promise<BackupDocument> {
       if (
         !vault ||
         vault.email_source !== "cf_domain" ||
-        lower(vault.account_email) !== lower(row.address)
+        lower(vault.mailbox_address || vault.account_email) !==
+          lower(row.address)
       )
         invalid("邮箱关联的台账不存在或地址不一致");
     }
   if (typed.manifest.schema_version === 10)
     return upgradeLegacyBackup(typed as LegacyBackupDocument);
-  if (typed.manifest.schema_version === 11) {
-    const tables = {
-      ...typed.tables,
-      provider_accounts: [],
-    } as BackupDocument["tables"];
-    return validateBackup({
-      manifest: {
-        ...typed.manifest,
-        schema_version: 12,
-        schema_hash: await digest(await backupSchema()),
-        table_counts: Object.fromEntries(
-          BACKUP_TABLES.map((table) => [table, tables[table].length]),
-        ),
-        table_hashes: Object.fromEntries(
-          await Promise.all(
-            BACKUP_TABLES.map(async (table) => [
-              table,
-              await digest(tables[table]),
-            ]),
-          ),
-        ),
-        data_hash: await digest(tables),
-      },
-      tables,
-    });
-  }
+  if (typed.manifest.schema_version === 11)
+    return upgradeSchema11Backup(typed as Schema11BackupDocument);
+  if (typed.manifest.schema_version === 12)
+    return upgradeSchema12Backup(typed as Schema12BackupDocument);
   return typed as BackupDocument;
+}
+
+type OlderBackupManifest = Omit<BackupManifest, "schema_version"> & {
+  schema_version: 10 | 11 | 12;
+};
+
+async function upgradeToSchema13(
+  manifest: OlderBackupManifest,
+  tables: BackupDocument["tables"],
+): Promise<BackupDocument> {
+  const upgraded: BackupDocument = {
+    manifest: {
+      ...manifest,
+      schema_version: 13,
+      schema_hash: await digest(await backupSchema(13)),
+      table_counts: Object.fromEntries(
+        BACKUP_TABLES.map((table) => [table, tables[table].length]),
+      ),
+      table_hashes: Object.fromEntries(
+        await Promise.all(
+          BACKUP_TABLES.map(async (table) => [
+            table,
+            await digest(tables[table]),
+          ]),
+        ),
+      ),
+      data_hash: await digest(tables),
+    },
+    tables,
+  };
+  return validateBackup(upgraded);
+}
+
+function addRegistrationDefaults(rows: Row[]): Row[] {
+  return rows.map((row) => ({ ...registrationDefaults, ...row }));
+}
+
+async function upgradeSchema11Backup(
+  legacy: Schema11BackupDocument,
+): Promise<BackupDocument> {
+  return upgradeToSchema13(legacy.manifest, {
+    ...legacy.tables,
+    platform_vault: addRegistrationDefaults(legacy.tables.platform_vault),
+    provider_accounts: [],
+  } as BackupDocument["tables"]);
+}
+
+async function upgradeSchema12Backup(
+  legacy: Schema12BackupDocument,
+): Promise<BackupDocument> {
+  return upgradeToSchema13(legacy.manifest, {
+    ...legacy.tables,
+    platform_vault: addRegistrationDefaults(legacy.tables.platform_vault),
+  });
 }
 
 /** Only called after every original schema, content hash and business invariant
@@ -888,28 +981,9 @@ async function upgradeLegacyBackup(
           : legacy.tables[table],
     ]),
   ) as Record<BackupTable, Row[]>;
-  const upgraded: BackupDocument = {
-    manifest: {
-      ...legacy.manifest,
-      schema_version: 12,
-      schema_hash: await digest(await backupSchema()),
-      table_counts: Object.fromEntries(
-        BACKUP_TABLES.map((table) => [table, tables[table].length]),
-      ),
-      table_hashes: Object.fromEntries(
-        await Promise.all(
-          BACKUP_TABLES.map(async (table) => [
-            table,
-            await digest(tables[table]),
-          ]),
-        ),
-      ),
-      data_hash: await digest(tables),
-    },
-    tables,
-  };
+  tables.platform_vault = addRegistrationDefaults(tables.platform_vault);
   // The derived rows also count toward the existing restoration limits.
-  return validateBackup(upgraded);
+  return upgradeToSchema13(legacy.manifest, tables);
 }
 
 interface Confirmation {
@@ -1068,7 +1142,7 @@ app.get("/manifest", async (c) => {
     data: {
       format: FORMAT,
       version: VERSION,
-      schema_version: 12,
+      schema_version: 13,
       name: "便携业务备份",
       limits: {
         max_plaintext_bytes: BACKUP_MAX_BYTES,

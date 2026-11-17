@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { Reply } from "@/lib/types";
 
 type StopReason = "manual" | "expired" | "error" | "matched";
@@ -7,6 +7,7 @@ type PollState<T> = {
   path: string | null;
   result?: Reply<T>;
   error?: string;
+  errorCode?: string;
   loading: boolean;
   enabled: boolean;
   hidden: boolean;
@@ -94,7 +95,7 @@ export function useSmartPolling<T>(
       needsLoad = false;
       const request = new AbortController();
       controller = request;
-      patch({ error: undefined });
+      patch({ error: undefined, errorCode: undefined });
       const task = (async () => {
         try {
           const result = await api<T>(
@@ -118,6 +119,7 @@ export function useSmartPolling<T>(
           patch({
             result,
             error: undefined,
+            errorCode: undefined,
             checkedAt: Date.now(),
             delay,
             ...(!enabled ? { reason: undefined } : {}),
@@ -127,6 +129,7 @@ export function useSmartPolling<T>(
           if (disposed || request.signal.aborted) return;
           patch({
             error: error instanceof Error ? error.message : "检查失败，请重试",
+            errorCode: error instanceof ApiError ? error.code : undefined,
           });
           stop("error", false);
         } finally {

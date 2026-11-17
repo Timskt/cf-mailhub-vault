@@ -94,6 +94,8 @@ import {
   type CSSProperties,
 } from "react";
 const VaultPage = lazy(() => import("@/pages/vault"));
+const IdentitiesPage = lazy(() => import("@/pages/identities"));
+const IdentitySheet = lazy(() => import("@/features/mailbox-identity"));
 const VaultEditor = lazy(() =>
   import("@/pages/vault").then((m) => ({ default: m.VaultEditor })),
 );
@@ -124,6 +126,7 @@ const CodeReader = lazy(() =>
 );
 const navigation = [
   { id: "vault", label: "平台账号", icon: Layers2 },
+  { id: "identities", label: "邮箱资产", icon: Mail },
   { id: "outlook", label: "Outlook", icon: Mail },
   { id: "providers", label: "外部邮箱", icon: Globe2 },
   { id: "mailboxes", label: "临时邮箱", icon: Timer },
@@ -302,7 +305,15 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((n) => n + 1), []);
   const settings = useResource<Settings>("/api/settings", revision);
-  const [vault, setVault] = useState<Partial<Vault> | null>(null);
+  const [vault, setVault] = useState<{
+    draft: Partial<Vault>;
+    section?: "verification";
+  } | null>(null);
+  const [identity, setIdentity] = useState<{
+    address: string;
+    source: string;
+    opener: HTMLElement | null;
+  } | null>(null);
   const [outlook, setOutlook] = useState<{ id: number; email: string } | null>(
     null,
   );
@@ -320,6 +331,7 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
         setCode(null);
         setMail(null);
         setVault(null);
+        setIdentity(null);
       }
       location.hash = page + (q ? `?${query({ q })}` : "");
     },
@@ -345,7 +357,16 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
     revision,
     refresh,
     navigate,
-    vault: setVault,
+    vault: (draft: Partial<Vault>, section?: "verification") =>
+      setVault({ draft, section }),
+    identity: (target: { address: string; source: string }) =>
+      setIdentity({
+        ...target,
+        opener:
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null,
+      }),
     outlook: (id: number, email: string) => setOutlook({ id, email }),
     repairOutlook: (target: OutlookRecoveryTarget) =>
       setOutlookRecovery((current) => current ?? { ...target }),
@@ -375,6 +396,9 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
               {route.page === "vault" && (
                 <VaultPage key={route.query} initialQuery={route.query} />
               )}
+              {route.page === "identities" && (
+                <IdentitiesPage key={route.query} initialQuery={route.query} />
+              )}
               {route.page === "outlook" && (
                 <OutlookPage key={route.query} initialQuery={route.query} />
               )}
@@ -394,12 +418,31 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
           </main>
         </div>
       </SidebarProvider>
-      <Suspense fallback={null}>
-        {vault && <VaultEditor draft={vault} close={() => setVault(null)} />}
-        {outlook && (
+      {identity && (
+        <Suspense fallback={null}>
+          <IdentitySheet
+            key={`${identity.source}:${identity.address}`}
+            target={identity}
+            close={() => setIdentity(null)}
+          />
+        </Suspense>
+      )}
+      {vault && (
+        <Suspense fallback={null}>
+          <VaultEditor
+            key={vault.draft.id ?? "new"}
+            {...vault}
+            close={() => setVault(null)}
+          />
+        </Suspense>
+      )}
+      {outlook && (
+        <Suspense fallback={null}>
           <OutlookReader {...outlook} close={() => setOutlook(null)} />
-        )}
-        {mail !== null && (
+        </Suspense>
+      )}
+      {mail !== null && (
+        <Suspense fallback={null}>
           <CfReader
             id={mail}
             close={() => {
@@ -407,15 +450,21 @@ function Workspace({ logout }: { logout: () => Promise<void> }) {
               refresh();
             }}
           />
-        )}
-        {code && <CodeReader path={code} close={() => setCode(null)} />}
-        {outlookRecovery && (
+        </Suspense>
+      )}
+      {code && (
+        <Suspense fallback={null}>
+          <CodeReader key={code} path={code} close={() => setCode(null)} />
+        </Suspense>
+      )}
+      {outlookRecovery && (
+        <Suspense fallback={null}>
           <OutlookRecoveryDialog
             target={outlookRecovery}
             close={() => setOutlookRecovery(null)}
           />
-        )}
-      </Suspense>
+        </Suspense>
+      )}
       {search && <GlobalSearch close={() => setSearch(false)} />}
       {confirmation && (
         <ConfirmationDialog
@@ -444,7 +493,7 @@ function Navigation({
         <SidebarGroup>
           <SidebarGroupLabel>工作区</SidebarGroupLabel>
           <SidebarMenu>
-            {navigation.slice(0, 7).map(({ id, label, icon: Icon }) => (
+            {navigation.slice(0, 8).map(({ id, label, icon: Icon }) => (
               <SidebarMenuItem key={id}>
                 <SidebarMenuButton asChild isActive={id === page}>
                   <a
@@ -464,7 +513,7 @@ function Navigation({
         <SidebarGroup className="mt-auto">
           <SidebarGroupLabel>管理</SidebarGroupLabel>
           <SidebarMenu>
-            {navigation.slice(7).map(({ id, label, icon: Icon }) => (
+            {navigation.slice(8).map(({ id, label, icon: Icon }) => (
               <SidebarMenuItem key={id}>
                 <SidebarMenuButton asChild isActive={id === page}>
                   <a

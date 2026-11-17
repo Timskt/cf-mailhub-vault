@@ -344,7 +344,11 @@ test("extended vault columns append to the original eleven and round trip with T
     assert.deepEqual(result.provided_fields, [columns]);
   }
   for (const format of ["text", "csv"] as const)
-    assert.deepEqual(parseVaultImport(serializeAccountText([account], "vault", { format })).accounts, [account]);
+    assert.deepEqual(
+      parseVaultImport(serializeAccountText([account], "vault", { format }))
+        .accounts,
+      [account],
+    );
   const legacy = parseVaultImport(
     serializeDelimited(
       [
@@ -602,64 +606,152 @@ test("import preview and writes share extended identities and preserve omitted c
   const f = await database();
   try {
     const base = {
-      platform_name: "Shared Platform", account_email: "shared@example.test", email_source: "external",
-      workspace: "personal", account_identifier: "member-1", login_methods: '["password"]',
-      password: "keep-private-password", totp_secret: "KEEPPRIVATE2FA", remark: "old remark", is_pinned: 1,
-      verification_sender: "auth@platform.test", mailbox_address: "delivery@example.test",
+      platform_name: "Shared Platform",
+      account_email: "shared@example.test",
+      email_source: "external",
+      workspace: "personal",
+      account_identifier: "member-1",
+      login_methods: '["password"]',
+      password: "keep-private-password",
+      totp_secret: "KEEPPRIVATE2FA",
+      remark: "old remark",
+      is_pinned: 1,
+      verification_sender: "auth@platform.test",
+      mailbox_address: "delivery@example.test",
     };
     const create = await f.request("/api/vault/import", { accounts: [base] });
     assert.equal(create.response.status, 200, JSON.stringify(create.data));
     const id = (await f.request("/api/vault")).data.data[0].id;
-    const patch = { platform_name: "SHARED PLATFORM", account_email: base.account_email, email_source: "external", workspace: "personal", account_identifier: "member-1", login_methods: '["password"]', remark: "new remark" };
+    const patch = {
+      platform_name: "SHARED PLATFORM",
+      account_email: base.account_email,
+      email_source: "external",
+      workspace: "personal",
+      account_identifier: "member-1",
+      login_methods: '["password"]',
+      remark: "new remark",
+    };
     const raw_text = JSON.stringify([patch]);
-    const preview = await f.request("/api/vault/import-preview", { raw_text, duplicate_mode: "update" });
+    const preview = await f.request("/api/vault/import-preview", {
+      raw_text,
+      duplicate_mode: "update",
+    });
     assert.equal(preview.data.rows[0].action, "update");
     assert.equal(preview.data.rows[0].existing_id, id);
     assert.ok(preview.data.rows[0].changed_fields.includes("remark"));
     assert.ok(!preview.data.rows[0].changed_fields.includes("password"));
     assert.ok(!JSON.stringify(preview.data).includes(base.password));
-    const merged = await f.request("/api/vault/import", { raw_text, duplicate_mode: "update" });
+    const merged = await f.request("/api/vault/import", {
+      raw_text,
+      duplicate_mode: "update",
+    });
     assert.equal(merged.data.updated, 1, JSON.stringify(merged.data));
     const detail = (await f.request(`/api/vault/${id}`)).data.data;
-    for (const key of ["password", "totp_secret", "mailbox_address", "verification_sender", "is_pinned"] as const)
+    for (const key of [
+      "password",
+      "totp_secret",
+      "mailbox_address",
+      "verification_sender",
+      "is_pinned",
+    ] as const)
       assert.equal(detail[key], base[key], key);
     assert.equal(detail.remark, "new remark");
 
     const variants = [
-      { ...patch, email_source: "outlook" }, { ...patch, workspace: "team" },
-      { ...patch, account_identifier: "member-2" }, { ...patch, login_methods: '["microsoft"]' },
+      { ...patch, email_source: "outlook" },
+      { ...patch, workspace: "team" },
+      { ...patch, account_identifier: "member-2" },
+      { ...patch, login_methods: '["microsoft"]' },
     ];
-    const distinct = await f.request("/api/vault/import", { accounts: variants });
+    const distinct = await f.request("/api/vault/import", {
+      accounts: variants,
+    });
     assert.equal(distinct.data.created, 4, JSON.stringify(distinct.data));
     assert.equal((await f.request("/api/vault")).data.total, 5);
 
-    const replacement = await f.request("/api/vault/import-preview", { raw_text, duplicate_mode: "update", update_mode: "replace" });
+    const replacement = await f.request("/api/vault/import-preview", {
+      raw_text,
+      duplicate_mode: "update",
+      update_mode: "replace",
+    });
     assert.ok(replacement.data.rows[0].changed_fields.includes("password"));
-    const replaced = await f.request("/api/vault/import", { raw_text, duplicate_mode: "update", update_mode: "replace" });
+    const replaced = await f.request("/api/vault/import", {
+      raw_text,
+      duplicate_mode: "update",
+      update_mode: "replace",
+    });
     assert.equal(replaced.data.updated, 1, JSON.stringify(replaced.data));
     const after = (await f.request(`/api/vault/${id}`)).data.data;
-    for (const field of ["password", "totp_secret", "mailbox_address", "verification_sender"]) assert.equal(after[field], "", field);
+    for (const field of [
+      "password",
+      "totp_secret",
+      "mailbox_address",
+      "verification_sender",
+    ])
+      assert.equal(after[field], "", field);
     assert.equal(after.is_pinned, 0);
-    assert.equal((await f.request("/api/vault/import", { raw_text, update_mode: "unsafe" })).response.status, 400);
-  } finally { await f.dispose(); }
+    assert.equal(
+      (
+        await f.request("/api/vault/import", {
+          raw_text,
+          update_mode: "unsafe",
+        })
+      ).response.status,
+      400,
+    );
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("direct import patches keep omitted secrets, clear explicitly supplied fields, and never conflate duplicated legacy records", async () => {
   const f = await database();
   try {
-    const base = { platform_name: "Patch", account_email: "patch@example.test", email_source: "cf_domain", password: "keep-secret", totp_secret: "keep-totp", remark: "old" };
+    const base = {
+      platform_name: "Patch",
+      account_email: "patch@example.test",
+      email_source: "cf_domain",
+      password: "keep-secret",
+      totp_secret: "keep-totp",
+      remark: "old",
+    };
     const created = await f.request("/api/vault", base);
     const id = created.data.data.id;
-    const result = await f.request("/api/vault/import", { accounts: [{ platform_name: base.platform_name, account_email: base.account_email, remark: "patched" }], duplicate_mode: "update" });
+    const result = await f.request("/api/vault/import", {
+      accounts: [
+        {
+          platform_name: base.platform_name,
+          account_email: base.account_email,
+          remark: "patched",
+        },
+      ],
+      duplicate_mode: "update",
+    });
     assert.equal(result.data.updated, 1, JSON.stringify(result.data));
-    assert.equal((await f.request(`/api/vault/${id}`)).data.data.password, base.password);
-    assert.equal((await f.request("/api/vault/import", { accounts: [{ ...base, password: "", totp_secret: "" }], duplicate_mode: "update" })).data.updated, 1);
+    assert.equal(
+      (await f.request(`/api/vault/${id}`)).data.data.password,
+      base.password,
+    );
+    assert.equal(
+      (
+        await f.request("/api/vault/import", {
+          accounts: [{ ...base, password: "", totp_secret: "" }],
+          duplicate_mode: "update",
+        })
+      ).data.updated,
+      1,
+    );
     assert.equal((await f.request(`/api/vault/${id}`)).data.data.password, "");
     await f.request("/api/vault", base);
-    const ambiguous = await f.request("/api/vault/import", { accounts: [base], duplicate_mode: "update" });
+    const ambiguous = await f.request("/api/vault/import", {
+      accounts: [base],
+      duplicate_mode: "update",
+    });
     assert.equal(ambiguous.response.status, 409);
     assert.match(ambiguous.data.message, /多个|重复|不唯一/);
-  } finally { await f.dispose(); }
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("Outlook fixed text and CSV exports reimport without changing complex password or remark", () => {

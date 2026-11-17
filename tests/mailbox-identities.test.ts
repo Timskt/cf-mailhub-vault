@@ -169,55 +169,151 @@ test("editing a shared registration preserves a valid manual mailbox representat
 test("legacy platform lookup follows explicit aliases and respects detachment", async () => {
   const f = await database();
   try {
-    const created = await f.request("/api/vault", { platform_name: "Legacy Alias", account_email: "login@example.test", mailbox_address: "delivery@example.test", email_source: "cf_domain" });
+    const created = await f.request("/api/vault", {
+      platform_name: "Legacy Alias",
+      account_email: "login@example.test",
+      mailbox_address: "delivery@example.test",
+      email_source: "cf_domain",
+    });
     await db(f.env).mutate([
-      insert("cf_inbox_mails", { recipient: "login@example.test", verification_code: "111111" }),
-      insert("cf_inbox_mails", { recipient: "delivery@example.test", verification_code: "222222" }),
+      insert("cf_inbox_mails", {
+        recipient: "login@example.test",
+        verification_code: "111111",
+      }),
+      insert("cf_inbox_mails", {
+        recipient: "delivery@example.test",
+        verification_code: "222222",
+      }),
     ]);
-    const result = await f.request("/api/external/code?platform=Legacy%20Alias");
+    const result = await f.request(
+      "/api/external/code?platform=Legacy%20Alias",
+    );
     assert.equal(result.data.code, "222222");
-    await f.request(`/api/vault/${created.data.data.id}`, { mailbox_link_state: "detached" }, "PUT");
-    assert.equal((await f.request("/api/external/code?platform=Legacy%20Alias")).response.status, 409);
+    await f.request(
+      `/api/vault/${created.data.data.id}`,
+      { mailbox_link_state: "detached" },
+      "PUT",
+    );
+    assert.equal(
+      (await f.request("/api/external/code?platform=Legacy%20Alias")).response
+        .status,
+      409,
+    );
     // Explicit email remains a mailbox query and has no registration context.
-    assert.equal((await f.request("/api/external/code?email=delivery@example.test&source=cf_domain")).data.code, "222222");
-  } finally { await f.dispose(); }
+    assert.equal(
+      (
+        await f.request(
+          "/api/external/code?email=delivery@example.test&source=cf_domain",
+        )
+      ).data.code,
+      "222222",
+    );
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("a completed verification cannot write stale history after the registration changes", async () => {
   const f = await database();
   try {
-    const created = await f.request("/api/vault", { platform_name: "In Flight", account_email: "old@example.test", email_source: "cf_domain", verification_sender: "auth@example.test" });
+    const created = await f.request("/api/vault", {
+      platform_name: "In Flight",
+      account_email: "old@example.test",
+      email_source: "cf_domain",
+      verification_sender: "auth@example.test",
+    });
     const id = created.data.data.id;
-    const snapshot = (await db(f.env).first<PlatformAccount>("platform_vault", eq("id", id)))!;
-    await f.request(`/api/vault/${id}`, { mailbox_address: "new@example.test" }, "PUT");
-    await assert.rejects(updateVaultCode(f.env, snapshot, { has_mail: true, code: "123456", link: "", scanned: 1 }), /变化|重新/);
+    const snapshot = (await db(f.env).first<PlatformAccount>(
+      "platform_vault",
+      eq("id", id),
+    ))!;
+    await f.request(
+      `/api/vault/${id}`,
+      { mailbox_address: "new@example.test" },
+      "PUT",
+    );
+    await assert.rejects(
+      updateVaultCode(f.env, snapshot, {
+        has_mail: true,
+        code: "123456",
+        link: "",
+        scanned: 1,
+      }),
+      /变化|重新/,
+    );
     assert.equal((await f.request(`/api/vault/${id}`)).data.data.last_code, "");
-  } finally { await f.dispose(); }
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("restored login methods keep their raw CAS identity while imports use canonical matching", async () => {
   const f = await database();
   try {
-    const created = await f.request("/api/vault", { platform_name: "Restored", account_email: "restored@example.test", email_source: "external", login_methods: '["google","password"]', password: "private-password" });
+    const created = await f.request("/api/vault", {
+      platform_name: "Restored",
+      account_email: "restored@example.test",
+      email_source: "external",
+      login_methods: '["google","password"]',
+      password: "private-password",
+    });
     const id = created.data.data.id;
-    await db(f.env).mutate([update("platform_vault", eq("id", id), { login_methods: '[ "password", "google" ]' })]);
-    const edit = await f.request(`/api/vault/${id}`, { remark: "edited" }, "PUT");
+    await db(f.env).mutate([
+      update("platform_vault", eq("id", id), {
+        login_methods: '[ "password", "google" ]',
+      }),
+    ]);
+    const edit = await f.request(
+      `/api/vault/${id}`,
+      { remark: "edited" },
+      "PUT",
+    );
     assert.equal(edit.response.status, 200, JSON.stringify(edit.data));
-    await db(f.env).mutate([update("platform_vault", eq("id", id), { login_methods: '[ "password", "google" ]' })]);
-    const imported = await f.request("/api/vault/import", { accounts: [{ platform_name: "Restored", account_email: "restored@example.test", email_source: "external", login_methods: '["google","password"]', remark: "imported" }], duplicate_mode: "update" });
+    await db(f.env).mutate([
+      update("platform_vault", eq("id", id), {
+        login_methods: '[ "password", "google" ]',
+      }),
+    ]);
+    const imported = await f.request("/api/vault/import", {
+      accounts: [
+        {
+          platform_name: "Restored",
+          account_email: "restored@example.test",
+          email_source: "external",
+          login_methods: '["google","password"]',
+          remark: "imported",
+        },
+      ],
+      duplicate_mode: "update",
+    });
     assert.equal(imported.response.status, 200, JSON.stringify(imported.data));
     assert.equal(imported.data.updated, 1);
-    assert.equal((await f.request(`/api/vault/${id}`)).data.data.password, "private-password");
-  } finally { await f.dispose(); }
+    assert.equal(
+      (await f.request(`/api/vault/${id}`)).data.data.password,
+      "private-password",
+    );
+  } finally {
+    await f.dispose();
+  }
 });
 
 test("expired CF identities expose their lifecycle state even when the domain is configured", async () => {
   const f = await database();
   try {
-    await db(f.env).mutate([insert("temp_mailboxes", { address: "expired@example.test", expires_at: "2000-01-01T00:00:00.000Z", is_permanent: 0 })]);
-    const result = await f.request(`/api/mailbox-identities/${encodeURIComponent("cf_domain:expired@example.test")}`);
+    await db(f.env).mutate([
+      insert("temp_mailboxes", {
+        address: "expired@example.test",
+        expires_at: "2000-01-01T00:00:00.000Z",
+        is_permanent: 0,
+      }),
+    ]);
+    const result = await f.request(
+      `/api/mailbox-identities/${encodeURIComponent("cf_domain:expired@example.test")}`,
+    );
     assert.equal(result.data.data.health.state, "disabled");
     assert.equal(result.data.data.health.needs_attention, true);
     assert.match(result.data.data.health.label, /过期|停用/);
-  } finally { await f.dispose(); }
+  } finally {
+    await f.dispose();
+  }
 });

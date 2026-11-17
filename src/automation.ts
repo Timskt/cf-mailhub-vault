@@ -1,5 +1,13 @@
 import { HTTPException } from "hono/http-exception";
-import { lookupCode, type CodeOptions } from "./codes";
+import { lookupCode, lookupVaultCode, type CodeOptions } from "./codes";
+import { deliveryAddress } from "../shared/registrations";
+import { mailboxReferenceFilter } from "./registration";
+import {
+  authorizeVaultAccount,
+  AuthorizationError,
+  type AuthContext,
+} from "./api-keys";
+import type { PlatformAccount } from "./types";
 import { getDomains } from "./domains";
 import { db, eq, StorageError } from "./storage/client";
 import type { Env } from "./types";
@@ -33,6 +41,14 @@ export class AutomationError extends Error {
   }
 }
 export function automationError(error: unknown) {
+  if (error instanceof AuthorizationError)
+    return {
+      success: false as const,
+      status: 403,
+      error: error.code,
+      message: error.message,
+      retryable: false,
+    };
   if (error instanceof AutomationError)
     return {
       success: false as const,
@@ -113,11 +129,21 @@ export function parseVerification(input: unknown) {
       since: since(body.since),
       sender: text(body.sender, "发件人", 254),
       keyword: text(body.q, "关键词", 200),
+      match: choice(
+        body.match,
+        "查询范围",
+        ["mailbox", "platform"] as const,
+        "mailbox",
+      ),
     } satisfies CodeOptions,
   };
 }
 
-export async function resolveTarget(env: Env, target: Target) {
+export async function resolveTarget(
+  env: Env,
+  target: Target,
+  auth?: AuthContext,
+) {
   const store = db(env);
   let address = target.email || "",
     source: string = target.source || "",
@@ -128,11 +154,21 @@ export async function resolveTarget(env: Env, target: Target) {
       id: number;
       account_email: string;
       email_source: string;
+      platform_name: string;
+      mailbox_address?: string;
+      mailbox_link_state?: string;
     }>("platform_vault", {
       where: target.vault_id
         ? eq("id", target.vault_id)
         : { field: "platform_name", op: "ieq", value: target.platform! },
-      columns: ["id", "account_email", "email_source"],
+      columns: [
+        "id",
+        "account_email",
+        "email_source",
+        "platform_name",
+        "mailbox_address",
+        "mailbox_link_state",
+      ],
       limit: 2,
     });
     if (!rows.length)
@@ -147,7 +183,14 @@ export async function resolveTarget(env: Env, target: Target) {
         "该平台有多个账号，请用 vault_id 或 email 精确指定",
         409,
       );
-    address = rows[0].account_email.toLowerCase();
+    await authorizeVaultAccount(env, auth, rows[0]);
+    if (rows[0].mailbox_link_state === "detached")
+      throw new AutomationError(
+        "MAILBOX_DETACHED",
+        "此平台注册已解除收件连接",
+        409,
+      );
+    address = deliveryAddress(rows[0]);
     source = rows[0].email_source;
     vaultId = rows[0].id;
   }
@@ -162,7 +205,7 @@ export async function resolveTarget(env: Env, target: Target) {
     const refs = await store.select<{ email_source: string }>(
       "platform_vault",
       {
-        where: { field: "account_email", op: "ieq", value: address },
+        where: mailboxReferenceFilter(address),
         columns: ["email_source"],
       },
     );
@@ -194,8 +237,12 @@ export async function resolveTarget(env: Env, target: Target) {
   }
   return { email: address, source, ...(vaultId ? { vault_id: vaultId } : {}) };
 }
-export async function inspectMailbox(env: Env, input: Target) {
-  const target = await resolveTarget(env, input);
+export async function inspectMailbox(
+  env: Env,
+  input: Target,
+  auth?: AuthContext,
+) {
+  const target = await resolveTarget(env, input, auth);
   const [enriched] = await enrichVault(env, [
     {
       account_email: target.email,
@@ -231,14 +278,42 @@ export async function verifyTarget(
   env: Env,
   parsed: ReturnType<typeof parseVerification>,
   resolved?: Awaited<ReturnType<typeof resolveTarget>>,
+  auth?: AuthContext,
 ) {
-  const target = resolved || (await resolveTarget(env, parsed.target));
-  const result = await lookupCode(
-    env,
-    target.email,
-    target.source,
-    parsed.options,
-  );
+  const target = resolved || (await resolveTarget(env, parsed.target, auth));
+  const account = target.vault_id
+    ? await db(env).first<PlatformAccount>(
+        "platform_vault",
+        eq("id", target.vault_id),
+      )
+    : null;
+  if (target.vault_id && !account)
+    throw new AutomationError(
+      "TARGET_NOT_FOUND",
+      "目标平台注册已删除，请重新选择",
+      404,
+    );
+  if (account) {
+    await authorizeVaultAccount(env, auth, account);
+    if (
+      deliveryAddress(account) !== target.email ||
+      account.email_source !== target.source
+    )
+      throw new AutomationError(
+        "TARGET_CHANGED",
+        "查询期间收件目标已变化，请重新查收",
+        409,
+      );
+  }
+  if (parsed.options.match === "platform" && !account)
+    throw new AutomationError(
+      "PLATFORM_TARGET_REQUIRED",
+      "平台模式请提供 vault_id 或唯一 platform",
+      400,
+    );
+  const result = account
+    ? await lookupVaultCode(env, account, parsed.options)
+    : await lookupCode(env, target.email, target.source, parsed.options);
   if (result.error) {
     const e = result.error;
     const status =
@@ -270,7 +345,11 @@ export async function verifyTarget(
   };
 }
 
-export async function batchVerification(env: Env, value: unknown) {
+export async function batchVerification(
+  env: Env,
+  value: unknown,
+  auth?: AuthContext,
+) {
   const body = object(value);
   if (
     !Array.isArray(body.items) ||
@@ -291,12 +370,12 @@ export async function batchVerification(env: Env, value: unknown) {
       const index = cursor++;
       try {
         const parsed = parseVerification(items[index]);
-        const target = await resolveTarget(env, parsed.target);
+        const target = await resolveTarget(env, parsed.target, auth);
         const key = `${target.source}:${target.email}`;
         const prior = locks.get(key) || Promise.resolve();
         const current = prior
           .catch(() => {})
-          .then(() => verifyTarget(env, parsed, target));
+          .then(() => verifyTarget(env, parsed, target, auth));
         locks.set(key, current);
         const data = await current;
         results[index] = { index, success: true, data };

@@ -1,4 +1,4 @@
-"""MailHub API 2.2 client for Python 3.10+. Standard library only.
+"""MailHub API 2.5.0 client for Python 3.10+. Standard library only.
 
 Requests make exactly one attempt. Only wait_for_verification polls, using a
 fixed since timestamp and a deadline of at most 180 seconds.
@@ -133,6 +133,10 @@ def _target(value: Any) -> None:
 
 def _verification_input(value: Any) -> None:
     _target(value)
+    if "match" in value and value["match"] not in ("mailbox", "platform"):
+        _invalid("match must be mailbox or platform")
+    if value.get("match") == "platform" and "email" in value:
+        _invalid("match=platform requires vault_id or platform")
     if "since" in value:
         _iso(value["since"])
     for key, maximum in (("sender", 254), ("q", 200)):

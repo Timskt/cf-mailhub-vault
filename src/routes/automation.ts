@@ -28,19 +28,28 @@ app.onError((error, c) => {
 app.post("/mailbox", async (c) =>
   c.json({
     success: true,
-    data: await inspectMailbox(c.env, parseTarget(await c.req.json())),
+    data: await inspectMailbox(
+      c.env,
+      parseTarget(await c.req.json()),
+      c.get("auth"),
+    ),
   }),
 );
 app.post("/verification", async (c) =>
   c.json({
     success: true,
-    data: await verifyTarget(c.env, parseVerification(await c.req.json())),
+    data: await verifyTarget(
+      c.env,
+      parseVerification(await c.req.json()),
+      undefined,
+      c.get("auth"),
+    ),
   }),
 );
 app.post("/verification/batch", async (c) =>
   c.json({
     success: true,
-    data: await batchVerification(c.env, await c.req.json()),
+    data: await batchVerification(c.env, await c.req.json(), c.get("auth")),
   }),
 );
 export default app;

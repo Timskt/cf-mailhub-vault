@@ -566,6 +566,11 @@ export function MailboxesPage() {
   };
   const items = (m: Mailbox) => [
     { label: "编辑用途备注", action: () => setPurpose(m) },
+    {
+      label: "查看全部登记",
+      icon: <Link />,
+      action: () => w.identity({ address: m.address, source: "cf_domain" }),
+    },
     { label: "查看收件", icon: <MailIcon />, action: () => setSelected(m.id) },
     {
       label: "取码 / 链接",
@@ -793,6 +798,18 @@ export function MailboxesPage() {
                         {m.associated_platform || (
                           <span className="text-muted-foreground">未关联</span>
                         )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            w.identity({
+                              address: m.address,
+                              source: "cf_domain",
+                            })
+                          }
+                        >
+                          查看全部登记
+                        </Button>
                       </TableCell>
                       <TableCell>
                         <Button
@@ -873,6 +890,15 @@ export function MailboxesPage() {
                   <p className="row-detail break-words">
                     {m.remark || "未填写用途"} · {m.unread_count || 0} 未读
                   </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      w.identity({ address: m.address, source: "cf_domain" })
+                    }
+                  >
+                    查看全部登记
+                  </Button>
                 </article>
               ))}
             </div>

@@ -2,10 +2,19 @@ import PostalMime from "postal-mime";
 import { extractVerificationInfo } from "./code-extractor";
 import { getDomains } from "./domains";
 import { organizeIncoming } from "./mail-workflows";
-import { and, db, digest, eq, insert, now, update, type Mutation } from "./storage/client";
+import {
+  and,
+  db,
+  digest,
+  eq,
+  insert,
+  now,
+  type Mutation,
+} from "./storage/client";
 import { attachmentManifest, saveRawMail } from "./mail-objects";
 import { webhookMutations } from "./webhooks";
 import type { Env } from "./types";
+import { mailboxReferenceFilter } from "./registration";
 export async function handleIncomingEmail(
   message: ForwardableEmailMessage,
   env: Env,
@@ -19,7 +28,9 @@ export async function handleIncomingEmail(
   }
   const maxSize = (env.MAIL_OBJECTS ? 20 : 2) * 1024 * 1024;
   if (message.rawSize > maxSize) {
-    message.setReject(`Message exceeds the ${maxSize / 1024 / 1024} MiB storage limit`);
+    message.setReject(
+      `Message exceeds the ${maxSize / 1024 / 1024} MiB storage limit`,
+    );
     return;
   }
   const [mailbox, bound] = await Promise.all([
@@ -29,7 +40,7 @@ export async function handleIncomingEmail(
     ),
     db(env).first<{ id: number; platform_name: string }>(
       "platform_vault",
-      and(eq("account_email", recipient), eq("email_source", "cf_domain")),
+      and(mailboxReferenceFilter(recipient), eq("email_source", "cf_domain")),
     ),
   ]);
   if (
@@ -44,15 +55,28 @@ export async function handleIncomingEmail(
   }
   // Throw on processing/storage failures so Cloudflare can retry instead of silently losing the mail.
   const raw = await new Response(message.raw).arrayBuffer();
-  if (raw.byteLength > maxSize) { message.setReject("Message exceeds storage limit"); return; }
-  const parsed = await new PostalMime({maxPartCount: 200, maxNestingDepth: 30}).parse(raw);
+  if (raw.byteLength > maxSize) {
+    message.setReject("Message exceeds storage limit");
+    return;
+  }
+  const parsed = await new PostalMime({
+    maxPartCount: 200,
+    maxNestingDepth: 30,
+  }).parse(raw);
   const messageId = parsed.messageId
     ? parsed.messageId.slice(0, 200)
     : Array.from(
         new Uint8Array(await crypto.subtle.digest("SHA-256", raw)),
         (b) => b.toString(16).padStart(2, "0"),
       ).join("");
-  if (await db(env).first("cf_inbox_mails", and(eq("message_id", messageId), eq("recipient", recipient)), {columns: ["id"]})) return;
+  if (
+    await db(env).first(
+      "cf_inbox_mails",
+      and(eq("message_id", messageId), eq("recipient", recipient)),
+      { columns: ["id"] },
+    )
+  )
+    return;
   const sender = (parsed.from?.address || message.from).toLowerCase();
   const subject = (parsed.subject || "(无主题)").slice(0, 500);
   const content = {
@@ -91,10 +115,24 @@ export async function handleIncomingEmail(
   );
   const rawObjectKey = await saveRawMail(env, raw);
   const eventId = await digest(["mail.received", recipient, messageId]);
-  const eventPayload = {recipient, sender, subject, received_at: now(), code: info.code, link: info.link};
+  const eventPayload = {
+    recipient,
+    sender,
+    subject,
+    received_at: now(),
+    code: info.code,
+    link: info.link,
+  };
   const events = [
-    ...await webhookMutations(env, "mail.received", eventPayload, eventId),
-    ...(info.code || info.link ? await webhookMutations(env, "code.extracted", eventPayload, `${eventId}:code`) : []),
+    ...(await webhookMutations(env, "mail.received", eventPayload, eventId)),
+    ...(info.code || info.link
+      ? await webhookMutations(
+          env,
+          "code.extracted",
+          eventPayload,
+          `${eventId}:code`,
+        )
+      : []),
   ];
   const statements: Mutation[] = [
     insert(
@@ -109,7 +147,9 @@ export async function handleIncomingEmail(
         html_content: content.html,
         raw_size: raw.byteLength,
         raw_object_key: rawObjectKey,
-        attachment_manifest: JSON.stringify(rawObjectKey ? attachmentManifest(parsed) : []),
+        attachment_manifest: JSON.stringify(
+          rawObjectKey ? attachmentManifest(parsed) : [],
+        ),
         verification_code: info.code,
         verification_link: info.link,
         dkim_status: dkim,
@@ -120,7 +160,9 @@ export async function handleIncomingEmail(
       { conflict: "ignore", match: ["message_id", "recipient"] },
     ),
     ...events,
-    ...(rawObjectKey ? [{op: "confirmMailObject" as const, key: rawObjectKey}] : []),
+    ...(rawObjectKey
+      ? [{ op: "confirmMailObject" as const, key: rawObjectKey }]
+      : []),
     insert(
       "domains",
       { domain, last_received_at: now() },
@@ -143,14 +185,8 @@ export async function handleIncomingEmail(
       { conflict: "ignore" },
     ),
   ];
-  if (bound && info.code)
-    statements.push(
-      update(
-        "platform_vault",
-        and(eq("account_email", recipient), eq("email_source", "cf_domain")),
-        { last_code: info.code, last_code_at: now() },
-      ),
-    );
+  // A received mailbox code has no confirmed platform ownership. Keep it on
+  // the original mail; platform history is written only by scoped lookups.
   const [stored] = await db(env).mutate(statements);
   if (stored.changes && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     const notification = fetch(

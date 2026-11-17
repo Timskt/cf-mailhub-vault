@@ -10,6 +10,7 @@ import {
   workflows,
 } from "../shared/api-guides";
 import { authMiddleware } from "./auth";
+import { AuthorizationError } from "./api-keys";
 import { AUTOMATION_LIMITS } from "./automation";
 import { runCleanup, runTokenRefresh } from "./cron";
 import { API_DOC_JSON } from "./docs";
@@ -32,6 +33,7 @@ import storageRoutes from "./routes/storage";
 import platformRoutes from "./routes/platforms";
 import vaultRoutes from "./routes/vault";
 import providerRoutes from "./routes/providers";
+import mailboxIdentityRoutes from "./routes/mailbox-identities";
 import credentialRoutes from "./routes/credentials";
 import webhookRoutes from "./routes/webhooks";
 import apiKeyRoutes from "./routes/api-keys";
@@ -46,6 +48,11 @@ import type { Env } from "./types";
 export { StorageCoordinator } from "./storage/durable-object";
 export const app = new Hono<{ Bindings: Env }>();
 app.onError((error, c) => {
+  if (error instanceof AuthorizationError)
+    return c.json(
+      { success: false, error: error.code, message: error.message },
+      403,
+    );
   if (error instanceof StorageError)
     return c.json(
       { success: false, error: error.code, message: error.message },
@@ -144,6 +151,7 @@ app.get("/api/domains", async (c) =>
 app.route("/api/auth", authRoutes);
 app.route("/api/external", externalRoutes);
 app.use("/api/*", authMiddleware());
+app.route("/api/mailbox-identities", mailboxIdentityRoutes);
 app.get("/api/capabilities", (c) =>
   c.json({
     success: true,

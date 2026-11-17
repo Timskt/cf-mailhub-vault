@@ -300,6 +300,15 @@ export default function ProvidersPage({
                   <Button
                     size="sm"
                     variant="outline"
+                    onClick={() =>
+                      w.identity({ address: a.address, source: a.provider })
+                    }
+                  >
+                    查看全部登记
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     disabled={a.status !== "active"}
                     onClick={() => setReader(a)}
                   >
@@ -336,6 +345,15 @@ export default function ProvidersPage({
                           w.vault({
                             account_email: a.address,
                             email_source: a.provider,
+                          }),
+                      },
+                      {
+                        label: "查看全部登记",
+                        icon: <Link />,
+                        action: () =>
+                          w.identity({
+                            address: a.address,
+                            source: a.provider,
                           }),
                       },
                       {
@@ -738,7 +756,10 @@ function ProviderReader({
               编辑账号 / 查看密码
             </Button>
           </div>
-          <RelatedVaultAccounts email={account.address} />
+          <RelatedVaultAccounts
+            email={account.address}
+            source={account.provider}
+          />
           {selected ? (
             <>
               <Button

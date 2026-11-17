@@ -30,6 +30,15 @@ import {
 } from "@/components/ui/table";
 import { api, copy, readFile, useAction } from "@/lib/api";
 import { useWorkspace } from "@/lib/context";
+import { accountTextColumns } from "../../shared/account-text";
+
+const fieldNames: Record<string, string> = Object.fromEntries(
+  accountTextColumns("vault").map(({ key, label }) => [key, label]),
+);
+const extendedFields = accountTextColumns("vault")
+  .slice(11)
+  .map(({ key }) => key)
+  .join("----");
 
 type Preview = {
   valid_count: number;
@@ -42,8 +51,26 @@ type Preview = {
     username?: string;
     error?: string;
     duplicate?: boolean;
+    action?: "create" | "update" | "skip";
+    changed_fields?: string[];
+    existing_id?: number;
+    provided_fields?: string[];
   }[];
 };
+const fieldList = (fields: string[]) =>
+  fields.map((field) => fieldNames[field] || field).join("、");
+function previewResult(row: Preview["rows"][number]) {
+  if (row.error) return row.error;
+  if (row.action === "skip")
+    return row.existing_id !== undefined
+      ? `跳过已有账号 · #${row.existing_id}`
+      : "跳过 · 已由同批后续有效行替代";
+  const duplicate = row.duplicate ? " · 采用批内最后一行" : "";
+  if (row.action === "create") return `新增${duplicate}`;
+  if (row.action === "update")
+    return `更新${row.existing_id !== undefined ? ` · #${row.existing_id}` : ""}${row.changed_fields?.length ? ` · ${fieldList(row.changed_fields)}` : " · 无字段变化"}${duplicate}`;
+  return row.duplicate ? "格式正确 · 批内重复" : "格式正确";
+}
 const formats = {
   text: {
     rule: "平台----邮箱----密码----用户名----邮箱来源----分类----状态----官网----2FA密钥----代理节点----备注",
@@ -78,6 +105,7 @@ export function VaultImportDialog({
   const [raw, setRaw] = useState("");
   const [fallback, setFallback] = useState(platform);
   const [mode, setMode] = useState("skip");
+  const [updateMode, setUpdateMode] = useState("merge");
   const [preview, setPreview] = useState<Preview | null>(null);
   const version = useRef(0);
   const action = useAction({ inline: true });
@@ -116,6 +144,13 @@ export function VaultImportDialog({
                 空字段保留分隔符；字段含分隔符或换行时使用双引号，字段内双引号写成两个双引号。未填来源时，微软邮箱识别为
                 Outlook，其余为外部邮箱。
               </p>
+              {format === "text" && extendedFields && (
+                <p>
+                  第 12 列起：
+                  <code className="break-all">{extendedFields}</code>
+                  。可省略末尾字段；登录方式使用 JSON 数组字符串。
+                </p>
+              )}
             </AlertDescription>
           </Alert>
           <Field>
@@ -174,11 +209,12 @@ export function VaultImportDialog({
               placeholder={formats[format].rule}
             />
             <FieldDescription>
-              格式自动识别，示例不会自动写入。文本最多 11 列；JSON
+              格式自动识别，示例不会自动写入。文本前 11
+              列保持兼容，末尾可继续追加高级字段；JSON
               可保留置顶等额外账号信息。
             </FieldDescription>
           </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <FieldGroup className="grid gap-4 sm:grid-cols-2">
             <TextField
               label="默认平台（可选）"
               value={fallback}
@@ -192,18 +228,36 @@ export function VaultImportDialog({
             <SelectField
               label="已有账号如何处理"
               value={mode}
-              onChange={setMode}
+              onChange={(value) => {
+                setMode(value);
+                invalidate();
+              }}
               disabled={action.busy}
               options={[
                 ["skip", "跳过已有账号"],
-                ["update", "更新已有账号（替换完整资料）"],
+                ["update", "更新已有账号"],
               ]}
             />
-          </div>
+            <SelectField
+              label="更新字段方式"
+              value={updateMode}
+              onChange={(value) => {
+                setUpdateMode(value);
+                invalidate();
+              }}
+              disabled={action.busy || mode !== "update"}
+              options={[
+                ["merge", "合并：只更新输入提供的字段"],
+                ["replace", "替换：清空未提供的可选字段"],
+              ]}
+            />
+          </FieldGroup>
           {mode === "update" && (
-            <Alert variant="destructive">
+            <Alert
+              variant={updateMode === "replace" ? "destructive" : "default"}
+            >
               <AlertDescription>
-                按平台、邮箱和用户名识别已有账号。更新会覆盖密码、2FA、备注和状态；未提供的字段也会使用空值或默认值，请核对完整内容。
+                按平台、登录邮箱、用户名、邮箱来源、工作区、账号标识和登录方式识别已有账号。合并只修改导入内容提供的字段；替换会清空未提供的可选字段，请核对完整内容。
               </AlertDescription>
             </Alert>
           )}
@@ -242,8 +296,12 @@ export function VaultImportDialog({
                         </div>
                       </TableCell>
                       <TableCell className="max-w-64 whitespace-normal">
-                        {r.error ||
-                          (r.duplicate ? "格式正确 · 批内重复" : "格式正确")}
+                        {previewResult(r)}
+                        {!r.error && !!r.provided_fields?.length && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            本行提供的字段：{fieldList(r.provided_fields)}
+                          </p>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -267,6 +325,8 @@ export function VaultImportDialog({
               const result = await api("/api/vault/import-preview", "POST", {
                 raw_text: raw,
                 platform_name: fallback,
+                duplicate_mode: mode,
+                update_mode: updateMode,
               });
               if (current === version.current)
                 setPreview(result as unknown as Preview);
@@ -284,6 +344,7 @@ export function VaultImportDialog({
                 raw_text: raw,
                 platform_name: fallback,
                 duplicate_mode: mode,
+                update_mode: updateMode,
               });
               toast.success(result.message);
               w.refresh();

@@ -19,11 +19,22 @@ export interface Env {
 }
 
 export interface PlatformAccount {
+  workspace?: string;
+  account_identifier?: string;
+  login_methods?: string;
+  mailbox_address?: string;
+  mailbox_link_state?: string;
+  verification_sender?: string;
+  verification_keyword?: string;
+  registered_at?: string;
+  last_verified_at?: string;
+  expires_at?: string;
   id: number;
   platform_name: string;
   platform_url: string;
   account_email: string;
-  email_source: "cf_domain" | "outlook" | "gptmail" | "external" | "mailtm" | "mailgw";
+  email_source:
+    "cf_domain" | "outlook" | "gptmail" | "external" | "mailtm" | "mailgw";
   username: string;
   password: string;
   totp_secret: string;

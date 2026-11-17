@@ -1,3 +1,4 @@
+import { deliveryAddress, mailboxReferenceFilter } from "../registration";
 import {
   and,
   defaults,
@@ -287,18 +288,22 @@ export async function plan(
       }
     } else if (mutation.op === "bindMailbox") {
       // Resolve the generated vault ID inside the same atomic commit.
-      const vault = (
+      const vaults = (
         await find(
           "platform_vault",
           and(
-            eq("account_email", mutation.address),
+            mailboxReferenceFilter(mutation.address),
             eq("email_source", "cf_domain"),
           ),
         )
-      ).sort((a, b) => Number(a.id) - Number(b.id))[0];
+      ).sort((a, b) => Number(a.id) - Number(b.id));
       const box = (
         await find("temp_mailboxes", eq("address", mutation.address))
       )[0];
+      // Keep an explicit representative while it still references this mailbox.
+      // Every matching registration continues to contribute to retention.
+      const vault =
+        vaults.find((row) => row.id === box?.associated_vault_id) || vaults[0];
       if (vault && !box)
         throw new StorageError("REFERENCE_MISSING", "关联邮箱不存在", 409);
       if (box) {
@@ -351,16 +356,36 @@ export async function plan(
         "temp_mailboxes",
         and(oneOf("address", addresses), eq("is_permanent", 1)),
       );
-      const vaults = await find(
-        "platform_vault",
-        and(oneOf("account_email", addresses), eq("email_source", "cf_domain")),
-      );
+      const vaults: Row[] = [];
+      // Each effective-address filter binds three values; chunk below D1's
+      // parameter limit while preserving alias and case-insensitive matching.
+      for (let offset = 0; offset < addresses.length; offset += 25)
+        vaults.push(
+          ...(await find(
+            "platform_vault",
+            and(
+              or(
+                ...addresses
+                  .slice(offset, offset + 25)
+                  .map((address) => mailboxReferenceFilter(String(address))),
+              ),
+              eq("email_source", "cf_domain"),
+            ),
+          )),
+        );
       const protectedAddresses = new Set([
-        ...boxes.map((b) => b.address),
-        ...vaults.map((v) => v.account_email),
+        ...boxes.map((b) => String(b.address).trim().toLowerCase()),
+        ...vaults.map((v) =>
+          deliveryAddress({
+            account_email: String(v.account_email),
+            mailbox_address: String(v.mailbox_address || ""),
+          }),
+        ),
       ]);
       for (const row of candidates)
-        if (!protectedAddresses.has(row.recipient)) {
+        if (
+          !protectedAddresses.has(String(row.recipient).trim().toLowerCase())
+        ) {
           remember("cf_inbox_mails", row, true);
           queueObjectDeletion(row);
           result.changes++;

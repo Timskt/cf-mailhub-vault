@@ -23,7 +23,6 @@ import {
   SelectField,
   TextField,
 } from "@/components/common";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,10 +72,8 @@ import {
 import {
   api,
   copy,
-  download,
   date,
   query,
-  readFile,
   safeUrl,
   useAction,
   useDebounce,
@@ -89,6 +86,12 @@ import {
   type PasswordOptions,
 } from "@/lib/password-generator";
 import { normalizeTotp } from "@/lib/totp";
+import {
+  loginMethodChoices,
+  loginMethodLabel,
+  loginMethods,
+  registrationMailbox,
+} from "@/lib/identities";
 import { cn } from "@/lib/utils";
 import type {
   Mailbox,
@@ -110,6 +113,7 @@ import {
   KeyRound,
   Layers,
   Link,
+  Mail as MailIcon,
   Pencil,
   Pin,
   Plus,
@@ -185,7 +189,6 @@ export default function VaultPage({
   } | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const search = useDebounce(filters.q);
-  const action = useAction();
   const platforms = useResource<VaultPlatform[]>(
     `/api/vault/platforms?${query({ ...filters, q: search, page, limit: 24, sort })}`,
     w.revision,
@@ -1064,7 +1067,7 @@ function PlatformDrawer({
         >
           <ModalBody>
             <VerificationLookup
-              path={`/api/vault/${verification.id}/code`}
+              path={`/api/vault/${verification.id}/code?match=platform`}
               onSettled={w.refresh}
             />
           </ModalBody>
@@ -1076,7 +1079,10 @@ function PlatformDrawer({
               <Button
                 variant="outline"
                 onClick={() =>
-                  w.navigate("outlook", verification.account_email)
+                  w.navigate(
+                    "outlook",
+                    registrationMailbox(verification).address,
+                  )
                 }
               >
                 查看邮箱连接
@@ -1288,27 +1294,33 @@ function VaultAccountCard({
   const w = useWorkspace();
   const action = useAction({ inline: true });
   const health = a.mailbox;
+  const mailbox = registrationMailbox(a);
   const canOpenInbox =
     a.email_source === "cf_domain" ||
     ((a.email_source === "outlook" || isMailProvider(a.email_source)) &&
       !!health?.account_id);
   const openInbox = () => {
     if (isMailProvider(a.email_source))
-      w.navigate("providers", a.account_email);
+      w.navigate("providers", mailbox.address);
     else if (a.email_source === "cf_domain")
-      w.navigate("inbox", a.account_email);
+      w.navigate("inbox", mailbox.address);
     else if (a.email_source === "outlook" && health?.account_id)
-      w.outlook(health.account_id, a.account_email);
+      w.outlook(health.account_id, mailbox.address);
   };
   const manage = () => {
     if (a.email_source === "outlook")
-      w.repairOutlook({ id: health?.account_id, email: a.account_email });
+      w.repairOutlook({ id: health?.account_id, email: mailbox.address });
     else if (isMailProvider(a.email_source))
-      w.navigate("providers", a.account_email);
+      w.navigate("providers", mailbox.address);
     else w.navigate("domains");
   };
   const items = [
     { label: "编辑账号", icon: <Pencil />, action: () => w.vault(a) },
+    {
+      label: "查看全部登记",
+      icon: <MailIcon />,
+      action: () => w.identity(mailbox),
+    },
     { label: "导出账号 / 复制配置", icon: <Download />, action: exportAccount },
     {
       label: "打开收件箱",
@@ -1395,6 +1407,7 @@ function VaultAccountCard({
             <p className="break-all text-xs text-muted-foreground">
               {a.username || "无用户名"} · {a.category || "未分类"}
             </p>
+            <RegistrationMetadata account={a} />
             <div className="flex flex-wrap gap-1">
               {!!a.is_pinned && (
                 <Badge variant="outline">
@@ -1437,7 +1450,7 @@ function VaultAccountCard({
                 size="sm"
                 variant="outline"
                 onClick={openInbox}
-                aria-label={`打开 ${a.account_email} 收件箱`}
+                aria-label={`打开 ${mailbox.address} 收件箱`}
               >
                 <Inbox data-icon="inline-start" />
                 收件箱
@@ -1468,6 +1481,14 @@ function VaultAccountCard({
                 管理连接
               </Button>
             )}
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label={`查看邮箱资产 ${mailbox.address}`}
+              onClick={() => w.identity(mailbox)}
+            >
+              查看邮箱资产
+            </Button>
             <CopyButton
               value={a.account_email}
               label={`复制 ${a.account_email}`}
@@ -1501,6 +1522,15 @@ function VaultAccountCard({
               {a.has_password ? " · 已保存密码" : ""}
               {a.has_totp ? " · 已启用 2FA" : ""}
             </CardDescription>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-auto self-start px-0"
+              aria-label={`查看邮箱资产 ${mailbox.address}`}
+              onClick={() => w.identity(mailbox)}
+            >
+              查看邮箱资产
+            </Button>
           </div>
           <div className="flex shrink-0 gap-1">
             <CopyButton value={a.account_email} label="复制邮箱" />
@@ -1509,6 +1539,7 @@ function VaultAccountCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <RegistrationMetadata account={a} />
         <div className="flex flex-wrap gap-2">
           <Badge variant={health?.needs_attention ? "destructive" : "outline"}>
             {health?.label || "邮箱状态待加载"}
@@ -1608,11 +1639,25 @@ function VaultAccountCard({
     </Card>
   );
 }
+function RegistrationMetadata({ account }: { account: Vault }) {
+  return (
+    <div className="flex flex-col gap-1 break-all text-xs text-muted-foreground">
+      {account.workspace && <p>工作区：{account.workspace}</p>}
+      <p>登录：{loginMethodLabel(account.login_methods)}</p>
+      {account.expires_at && <p>到期：{date(account.expires_at)}</p>}
+      {account.mailbox_link_state === "detached" && (
+        <p>已解除收件连接 · 平台凭据保留</p>
+      )}
+    </div>
+  );
+}
 export function VaultEditor({
   draft,
+  section,
   close,
 }: {
   draft: Partial<Vault>;
+  section?: "verification";
   close: () => void;
 }) {
   const detail = useResource<Vault>(draft.id ? `/api/vault/${draft.id}` : null);
@@ -1632,10 +1677,27 @@ export function VaultEditor({
           )}
         </ModalBody>
       ) : (
-        <VaultForm initial={detail.result?.data || draft} close={close} />
+        <VaultForm
+          initial={detail.result?.data || draft}
+          section={section}
+          close={close}
+        />
       )}
     </Modal>
   );
+}
+
+function dateInput(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+        .toISOString()
+        .slice(0, 16);
+}
+function isoValue(value: string) {
+  return value ? new Date(value).toISOString() : "";
 }
 
 function PasswordField({
@@ -1839,9 +1901,11 @@ function PasswordField({
 }
 function VaultForm({
   initial,
+  section,
   close,
 }: {
   initial: Partial<Vault>;
+  section?: "verification";
   close: () => void;
 }) {
   const w = useWorkspace();
@@ -1864,8 +1928,31 @@ function VaultForm({
     status: "active",
     proxy_node: "",
     remark: "",
+    workspace: "",
+    account_identifier: "",
+    login_methods: '["unknown"]',
+    mailbox_address: "",
+    mailbox_link_state: "auto",
+    verification_sender: "",
+    verification_keyword: "",
+    registered_at: "",
+    last_verified_at: "",
+    expires_at: "",
     ...initial,
   });
+  const [advanced, setAdvanced] = useState(!!section);
+  const [methods, setMethods] = useState<string[]>(
+    loginMethods(initial.login_methods),
+  );
+  useEffect(() => {
+    if (!section) return;
+    setAdvanced(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("vault-verification-rules")
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }, [section]);
   const [domain, setDomain] = useState(
     w.settings?.domains.find((d) => d.is_default)?.domain ||
       w.settings?.domains.find((d) => d.enabled)?.domain ||
@@ -2042,6 +2129,128 @@ function VaultForm({
                 onChange={(e) => set("remark", e.target.value)}
               />
             </Field>
+            <details
+              open={advanced}
+              onToggle={(event) => setAdvanced(event.currentTarget.open)}
+              className="sm:col-span-2 rounded-md border"
+            >
+              <summary className="cursor-pointer p-4 text-sm font-medium">
+                高级信息 · 工作区、登录方式、收件连接与到期
+              </summary>
+              <div className="px-4 pb-4">
+                <FieldGroup className="grid gap-4 sm:grid-cols-2">
+                  <TextField
+                    label="工作区"
+                    value={data.workspace || ""}
+                    onChange={(e) => set("workspace", e.target.value)}
+                  />
+                  <TextField
+                    label="账号标识"
+                    value={data.account_identifier || ""}
+                    onChange={(e) => set("account_identifier", e.target.value)}
+                  />
+                  <FieldSet className="sm:col-span-2">
+                    <FieldLegend>登录方式</FieldLegend>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {loginMethodChoices.map(([method, label]) => (
+                        <label
+                          key={method}
+                          className="flex items-center gap-2 text-sm"
+                        >
+                          <Checkbox
+                            checked={methods.includes(method)}
+                            onCheckedChange={(checked) => {
+                              let next =
+                                checked === true
+                                  ? method === "unknown"
+                                    ? ["unknown"]
+                                    : [
+                                        ...methods.filter(
+                                          (v) => v !== "unknown",
+                                        ),
+                                        method,
+                                      ]
+                                  : methods.filter((v) => v !== method);
+                              if (!next.length) next = ["unknown"];
+                              setMethods(next);
+                              set("login_methods", JSON.stringify(next));
+                            }}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </FieldSet>
+                  <TextField
+                    label="实际收件地址（别名）"
+                    type="email"
+                    value={data.mailbox_address || ""}
+                    onChange={(e) => set("mailbox_address", e.target.value)}
+                    help={`留空时使用登录邮箱 ${data.account_email || ""}`}
+                  />
+                  <SelectField
+                    label="收件连接"
+                    value={data.mailbox_link_state || "auto"}
+                    onChange={(value) => set("mailbox_link_state", value)}
+                    options={[
+                      ["auto", "自动跟随邮箱"],
+                      ["detached", "已解除连接"],
+                    ]}
+                  />
+                  <p className="sm:col-span-2 text-xs text-muted-foreground">
+                    解除收件连接只停止此平台使用邮箱取码，平台密码、2FA
+                    与登记资料仍然保留。
+                  </p>
+                  <div
+                    id="vault-verification-rules"
+                    className="sm:col-span-2 flex flex-col gap-1"
+                  >
+                    <strong className="text-sm">平台取码规则</strong>
+                    <p className="text-xs text-muted-foreground">
+                      设置至少一条规则，平台取码只返回符合规则的邮件。查整个邮箱需要在取码窗口中明确选择。
+                    </p>
+                  </div>
+                  <TextField
+                    label="发件人包含"
+                    value={data.verification_sender || ""}
+                    onChange={(e) => set("verification_sender", e.target.value)}
+                    placeholder="例如 auth.example.com"
+                  />
+                  <TextField
+                    label="邮件关键词"
+                    value={data.verification_keyword || ""}
+                    onChange={(e) =>
+                      set("verification_keyword", e.target.value)
+                    }
+                    placeholder="例如 Atlas 验证码"
+                  />
+                  <TextField
+                    label="登记时间（ISO，可空）"
+                    type="datetime-local"
+                    value={dateInput(data.registered_at)}
+                    onChange={(e) =>
+                      set("registered_at", isoValue(e.target.value))
+                    }
+                  />
+                  <TextField
+                    label="上次验证（ISO，可空）"
+                    type="datetime-local"
+                    value={dateInput(data.last_verified_at)}
+                    onChange={(e) =>
+                      set("last_verified_at", isoValue(e.target.value))
+                    }
+                  />
+                  <TextField
+                    label="到期时间（ISO，可空）"
+                    type="datetime-local"
+                    value={dateInput(data.expires_at)}
+                    onChange={(e) =>
+                      set("expires_at", isoValue(e.target.value))
+                    }
+                  />
+                </FieldGroup>
+              </div>
+            </details>
           </FieldGroup>
         </fieldset>
       </ModalBody>

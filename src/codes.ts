@@ -2,6 +2,8 @@ import { isMailProvider, type ProviderAccount } from "../shared/mail-providers";
 import { providerCode, ProviderError } from "./mail-providers";
 import { extractVerificationInfo } from "./code-extractor";
 import type { GraphResult } from "./graph";
+import { deliveryAddress } from "../shared/registrations";
+import { StorageError } from "./storage/model";
 import { outlookCode, type CodeResult } from "./outlook";
 import { and, db, eq, now, search, update } from "./storage/client";
 import type {
@@ -14,6 +16,45 @@ export interface CodeOptions {
   since?: string;
   sender?: string;
   keyword?: string;
+  match?: "platform" | "mailbox";
+}
+export async function lookupVaultCode(
+  env: Env,
+  account: PlatformAccount,
+  options: CodeOptions = {},
+) {
+  if (account.mailbox_link_state === "detached")
+    throw new StorageError(
+      "MAILBOX_DETACHED",
+      "此平台注册已解除收件连接；请先重新关联。",
+      409,
+    );
+  const mode = options.match || "mailbox";
+  const sender = options.sender || account.verification_sender || "";
+  const keyword = options.keyword || account.verification_keyword || "";
+  if (mode === "platform" && !sender && !keyword)
+    throw new StorageError(
+      "VERIFICATION_RULE_REQUIRED",
+      "尚未配置此平台的发件人或关键词；请配置规则，或明确选择查整个邮箱。",
+      409,
+    );
+  const result = await lookupCode(
+    env,
+    deliveryAddress(account),
+    account.email_source,
+    mode === "platform" ? { ...options, sender, keyword } : options,
+  );
+  if (result.data) {
+    result.data.match_scope = mode;
+    result.data.match_reason =
+      mode === "platform"
+        ? [sender && `发件人包含 ${sender}`, keyword && `关键词 ${keyword}`]
+            .filter(Boolean)
+            .join("；")
+        : "邮箱范围查询，未确认属于此平台";
+    if (mode === "platform") await updateVaultCode(env, account, result.data);
+  }
+  return result;
 }
 export async function lookupCode(
   env: Env,
@@ -137,6 +178,22 @@ export async function updateVaultCode(
 ) {
   if (result.code)
     await db(env).mutate([
+      {
+        op: "assertExists",
+        table: "platform_vault",
+        where: and(
+          eq("id", account.id),
+          eq("updated_at", account.updated_at),
+          eq("platform_name", account.platform_name),
+          eq("account_email", account.account_email),
+          eq("email_source", account.email_source),
+          eq("mailbox_address", account.mailbox_address || ""),
+          eq("mailbox_link_state", account.mailbox_link_state || "auto"),
+          eq("verification_sender", account.verification_sender || ""),
+          eq("verification_keyword", account.verification_keyword || ""),
+        ),
+        message: "查询期间平台注册或收件规则已发生变化，请重新查收",
+      },
       update("platform_vault", eq("id", account.id), {
         last_code: result.code,
         last_code_at: result.received_at || now(),

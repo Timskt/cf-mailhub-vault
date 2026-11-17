@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import { and, db, eq, insert, now, update, type Row } from "./storage/client";
 import type { Env } from "./types";
 import { email, integer, invalid, object, text } from "./validation";
+import { mailboxReferenceFilter } from "./registration";
 
 export const API_SCOPES = [
   "verify:read",
@@ -365,6 +366,9 @@ function policy(method: string, path: string): Policy | null {
     ) ||
     /^\/api\/settings(?:\/domains(?:\/[^/]+(?:\/check)?)?)?$/.test(path) ||
     /^\/api\/platforms(?:\/[^/]+(?:\/merge)?)?$/.test(path) ||
+    /^\/api\/mailbox-identities(?:\/[^/]+(?:\/(?:registrations|impact))?)?$/.test(
+      path,
+    ) ||
     path === "/api/search"
   )
     return { scopes: ["admin"], collection: true };
@@ -400,7 +404,7 @@ async function resourceAllowed(
     } else {
       if (!emailValue) throw new AuthorizationError("RESOURCE_FORBIDDEN");
       const links = await db(env).select("platform_vault", {
-        where: and(ieq("account_email", emailValue), {
+        where: and(mailboxReferenceFilter(emailValue), {
           or: restrictions.platforms.map((p) => ieq("platform_name", p)),
         }),
         columns: ["id"],
@@ -409,6 +413,21 @@ async function resourceAllowed(
       if (!links.length) throw new AuthorizationError("RESOURCE_FORBIDDEN");
     }
   }
+}
+/** Authorize both login identity and actual mailbox before reading or mutating a registration. */
+export async function authorizeVaultAccount(
+  env: Env,
+  auth: AuthContext | undefined,
+  row: {
+    account_email?: unknown;
+    platform_name?: unknown;
+    mailbox_address?: unknown;
+  },
+) {
+  if (auth?.kind !== "api_key") return;
+  await resourceAllowed(env, auth, row.account_email, row.platform_name);
+  if (row.mailbox_address)
+    await resourceAllowed(env, auth, row.mailbox_address, row.platform_name);
 }
 async function rowAllowed(
   env: Env,
@@ -428,7 +447,7 @@ async function rowAllowed(
             : "cf_inbox_mails";
   const columns =
     resource === "vault"
-      ? ["account_email", "platform_name"]
+      ? ["account_email", "platform_name", "mailbox_address"]
       : resource === "mailbox"
         ? ["address", "associated_platform"]
         : resource === "outlook"
@@ -444,6 +463,8 @@ async function rowAllowed(
     row.account_email ?? row.address ?? row.email ?? row.recipient,
     resource === "vault" ? row.platform_name : undefined,
   );
+  if (resource === "vault" && row.mailbox_address)
+    await resourceAllowed(env, auth, row.mailbox_address, row.platform_name);
   return row;
 }
 async function targetAllowed(env: Env, auth: AuthContext, input: unknown) {
@@ -471,7 +492,7 @@ async function targetAllowed(env: Env, auth: AuthContext, input: unknown) {
     throw new AuthorizationError("RESOURCE_FORBIDDEN");
   const rows = await db(env).select("platform_vault", {
     where: ieq("platform_name", platform),
-    columns: ["account_email", "platform_name"],
+    columns: ["account_email", "platform_name", "mailbox_address"],
     limit: 2,
   });
   if (rows.length !== 1)
@@ -479,12 +500,7 @@ async function targetAllowed(env: Env, auth: AuthContext, input: unknown) {
       "RESOURCE_FORBIDDEN",
       "受限密钥需要唯一且获准的台账目标，请使用 vault_id",
     );
-  await resourceAllowed(
-    env,
-    auth,
-    rows[0].account_email,
-    rows[0].platform_name,
-  );
+  await authorizeVaultAccount(env, auth, rows[0]);
 }
 export async function authorizeApiRequest(
   c: Context<{ Bindings: Env }>,
@@ -551,6 +567,13 @@ export async function authorizeApiRequest(
         body.account_email ?? row.account_email,
         body.platform_name ?? row.platform_name,
       );
+    if (rule.resource === "vault" && write && body.mailbox_address)
+      await resourceAllowed(
+        c.env,
+        auth,
+        body.mailbox_address,
+        body.platform_name ?? row.platform_name,
+      );
     if (rule.resource === "outlook" && write && body.email !== undefined)
       await resourceAllowed(c.env, auth, email(body.email));
     if (path.endsWith("/link-vault"))
@@ -580,12 +603,10 @@ export async function authorizeApiRequest(
     body.account_email &&
     !body.generate_email
   ) {
-    await resourceAllowed(
-      c.env,
-      auth,
-      email(body.account_email),
-      body.platform_name,
-    );
+    await authorizeVaultAccount(c.env, auth, {
+      ...body,
+      account_email: email(body.account_email),
+    });
     return;
   }
   if (
@@ -596,12 +617,10 @@ export async function authorizeApiRequest(
   ) {
     for (const item of body.accounts) {
       const row = object(item);
-      await resourceAllowed(
-        c.env,
-        auth,
-        email(row.account_email),
-        row.platform_name,
-      );
+      await authorizeVaultAccount(c.env, auth, {
+        ...row,
+        account_email: email(row.account_email),
+      });
     }
     return;
   }

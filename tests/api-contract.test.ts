@@ -49,6 +49,8 @@ import { D1Port } from "../src/storage/d1";
 import { Coordinator } from "../src/storage/coordinator";
 import { MemoryControl } from "./storage-support";
 import { StorageError } from "../src/storage/model";
+import { createApiKey } from "../src/api-keys";
+import { MailHubClient } from "../sdk/typescript/index";
 import type { Env } from "../src/types";
 
 const ajv = new Ajv2020({ strict: false, allErrors: true });
@@ -71,6 +73,451 @@ const responseConforms = (operationId: string, data: unknown) =>
     data,
     operationId,
   );
+
+test("registration, verification and import schemas describe the current wire fields", () => {
+  const registration = {
+    platform_name: "Example",
+    account_email: "login@example.test",
+    email_source: "mailtm",
+    workspace: "Team",
+    account_identifier: "member-42",
+    login_methods: ["google", "password"],
+    mailbox_address: "delivery@example.test",
+    mailbox_link_state: "auto",
+    verification_sender: "auth@example.test",
+    verification_keyword: "Example",
+    registered_at: "2026-11-15T00:00:00Z",
+    last_verified_at: "",
+    expires_at: "2026-12-15T00:00:00+08:00",
+  };
+  const properties = schemas.VaultInput.properties as Record<string, unknown>;
+  for (const field of Object.keys(registration))
+    assert.ok(Object.hasOwn(properties, field), field);
+  conforms(schemas.VaultInput, registration, "registration input");
+  conforms(
+    schemas.VaultInput,
+    { ...registration, login_methods: '["passkey"]' },
+    "serialized login methods",
+  );
+  conforms(
+    schemas.VaultInput,
+    { ...registration, mailbox_link_state: "" },
+    "empty link state defaults to auto",
+  );
+  const wireMetadata = ajv.compile({
+    ...schemas.RegistrationMetadata,
+    components: { schemas },
+  });
+  assert.equal(
+    wireMetadata({ mailbox_link_state: "", login_methods: '["unknown"]' }),
+    false,
+    "wire state is normalized",
+  );
+  assert.equal(
+    wireMetadata({ mailbox_link_state: "auto", login_methods: ["unknown"] }),
+    false,
+    "wire login methods are serialized",
+  );
+  for (const patch of [
+    { login_methods: ["invented"] },
+    { login_methods: '["invented"]' },
+    { mailbox_link_state: "linked" },
+    { mailbox_address: "not an address" },
+    { registered_at: "2026-11-15" },
+  ]) {
+    const validate = ajv.compile({
+      ...schemas.VaultInput,
+      components: { schemas },
+    });
+    assert.equal(
+      validate({ ...registration, ...patch }),
+      false,
+      JSON.stringify(patch),
+    );
+  }
+  const verification = ajv.compile({
+    ...schemas.VerificationRequest,
+    components: { schemas },
+  });
+  for (const target of [
+    { email: "user@example.test" },
+    { vault_id: 1 },
+    { platform: "Example" },
+  ]) {
+    assert.equal(verification({ ...target, match: "mailbox" }), true);
+    assert.equal(
+      verification({ ...target, match: "platform" }),
+      !Object.hasOwn(target, "email"),
+    );
+    assert.equal(verification({ ...target, match: "all" }), false);
+  }
+  for (const mode of ["merge", "replace"]) {
+    const body = {
+      accounts: [registration],
+      duplicate_mode: "update",
+      update_mode: mode,
+    };
+    conforms(schemas.VaultImport, body, `import ${mode}`);
+    const preview = operations.find(
+      (o) => o.operationId === "previewVaultImport",
+    )!;
+    conforms(
+      preview.body!,
+      { raw_text: "[]", duplicate_mode: "update", update_mode: mode },
+      "preview modes",
+    );
+  }
+  const importSchema = ajv.compile({
+    ...schemas.VaultImport,
+    components: { schemas },
+  });
+  assert.equal(
+    importSchema({ accounts: [registration], update_mode: "overwrite" }),
+    false,
+  );
+  conforms(
+    schemas.VaultImportPreview,
+    {
+      success: true,
+      valid_count: 3,
+      error_count: 1,
+      duplicate_count: 0,
+      rows: [
+        {
+          line: 1,
+          platform_name: "Example",
+          account_email: "user@example.test",
+          action: "update",
+          changed_fields: ["remark"],
+          existing_id: 7,
+          provided_fields: ["platform_name", "account_email", "remark"],
+        },
+        {
+          line: 2,
+          action: "create",
+          changed_fields: ["platform_name", "account_email"],
+        },
+        { line: 3, action: "skip", changed_fields: [], existing_id: 8 },
+        { line: 4, error: "Invalid email" },
+      ],
+    },
+    "preview plan",
+  );
+  const previewSchema = ajv.compile({
+    ...schemas.VaultImportPreview,
+    components: { schemas },
+  });
+  assert.equal(
+    previewSchema({
+      success: true,
+      valid_count: 1,
+      error_count: 0,
+      duplicate_count: 0,
+      rows: [{ line: 1 }],
+    }),
+    false,
+    "valid rows require an explicit plan",
+  );
+  const query = operations
+    .find((o) => o.operationId === "lookupVaultCode")!
+    .parameters.find((p) => p.name === "match");
+  assert.deepEqual(query?.schema.enum, ["mailbox", "platform"]);
+  assert.equal(query?.schema.default, "mailbox");
+  assert.equal(
+    operations
+      .find((o) => o.operationId === "lookupProviderVerification")!
+      .parameters.some((p) => p.name === "match"),
+    false,
+  );
+});
+
+test("mailbox identity contracts cover encoded IDs, pagination, global summary and admin collection restrictions", async () => {
+  const f = await database();
+  try {
+    for (const [name, state] of [
+      ["First", "auto"],
+      ["Second", "detached"],
+    ]) {
+      const created = await f.request("/api/vault", {
+        platform_name: name,
+        account_email: `${name.toLowerCase()}@login.test`,
+        email_source: "external",
+        mailbox_address: "shared+alias@example.test",
+        mailbox_link_state: state,
+        workspace: "Team",
+        login_methods: ["google"],
+        password: "private-registration-password",
+        totp_secret: "JBSWY3DPEHPK3PXP",
+      });
+      assert.equal(created.response.status, 200, JSON.stringify(created.data));
+    }
+    const identityId = "external:shared+alias@example.test";
+    const path = `/api/mailbox-identities/${encodeURIComponent(identityId)}`;
+    const list = await f.request(
+      "/api/mailbox-identities?q=First&source=external&page=1&limit=1",
+    );
+    assert.equal(list.response.status, 200);
+    responseConforms("listMailboxIdentities", list.data);
+    assert.equal(list.data.total, 1);
+    assert.equal(list.data.data[0].id, identityId);
+    assert.equal(list.data.data[0].registration_count, 2);
+    assert.equal(list.data.data[0].affected_registrations, 1);
+    const empty = await f.request("/api/mailbox-identities?q=not-present");
+    assert.equal(empty.data.total, 0);
+    assert.deepEqual(empty.data.summary, list.data.summary);
+    for (const [suffix, operationId] of [
+      ["", "getMailboxIdentity"],
+      ["/registrations?page=2&limit=1", "listMailboxIdentityRegistrations"],
+      ["/impact", "getMailboxIdentityImpact"],
+    ]) {
+      const result = await f.request(path + suffix);
+      assert.equal(result.response.status, 200, JSON.stringify(result.data));
+      responseConforms(operationId, result.data);
+      assert.equal(
+        JSON.stringify(result.data).includes("private-registration-password"),
+        false,
+      );
+      assert.equal(
+        JSON.stringify(result.data).includes("JBSWY3DPEHPK3PXP"),
+        false,
+      );
+      if (suffix.startsWith("/registrations")) {
+        assert.equal(result.data.page, 2);
+        assert.equal(result.data.total, 2);
+        assert.deepEqual(result.data.summary, {
+          platforms: 2,
+          registrations: 2,
+        });
+        assert.equal(result.data.data[0].login_methods, '["google"]');
+      }
+    }
+    const spec = openApi();
+    const restricted = await createApiKey(f.env, {
+      name: "restricted identity manager",
+      scopes: ["admin"],
+      restrictions: { emails: ["shared+alias@example.test"] },
+    });
+    const admin = await createApiKey(f.env, {
+      name: "identity manager",
+      scopes: ["admin"],
+    });
+    for (const endpoint of [
+      "/api/mailbox-identities?q=First&source=external",
+      path,
+      path + "/registrations",
+      path + "/impact",
+    ]) {
+      const denied = await f.request(endpoint, undefined, "GET", {
+        "X-API-Key": restricted.key,
+      });
+      assert.equal(denied.response.status, 403, endpoint);
+      assert.equal(denied.data.error, "RESOURCE_SCOPE_REQUIRED");
+      assert.equal(
+        (
+          await f.request(endpoint, undefined, "GET", {
+            "X-API-Key": admin.key,
+          })
+        ).response.status,
+        200,
+      );
+    }
+    for (const operation of operations.filter((o) =>
+      o.path.startsWith("/api/mailbox-identities"),
+    )) {
+      assert.deepEqual(operation.grants, ["admin"]);
+      const authorization = (
+        spec.paths[operation.path][operation.method] as any
+      )["x-authorization"];
+      assert.equal(authorization.collection, true);
+      assert.equal(authorization.resource_restricted_keys_allowed, false);
+      const parameter = operation.parameters.find((p) => p.in === "path");
+      if (parameter) {
+        assert.equal(parameter.schema.type, "string");
+        assert.match(parameter.description, /source:address/);
+      }
+    }
+    assert.equal(
+      (await f.request("/api/mailbox-identities?source=invalid")).response
+        .status,
+      400,
+    );
+    assert.equal(
+      (await f.request("/api/mailbox-identities?limit=101")).response.status,
+      400,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("TypeScript and Python SDKs preserve match and reject unsupported scopes before I/O", async () => {
+  const calls: unknown[] = [];
+  const sdk = new MailHubClient({
+    baseUrl: "https://mailhub.example.test",
+    apiKey: "fictional-contract-sdk-key",
+    fetch: async (_input, init) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return Response.json({
+        success: true,
+        data: { match_scope: "platform", match_reason: "explicit rule" },
+      });
+    },
+  });
+  const request = { vault_id: 7, match: "platform" as const, sender: "auth" };
+  const result = await sdk.lookupVerification(request);
+  assert.deepEqual(calls, [request]);
+  assert.equal((result.data as any).match_scope, "platform");
+  for (const invalid of [
+    { vault_id: 7, match: "all" },
+    { email: "user@example.test", match: "platform" },
+  ])
+    await assert.rejects(
+      () => sdk.lookupVerification(invalid as any),
+      (error: any) => error.code === "INVALID_ARGUMENT",
+    );
+  assert.equal(calls.length, 1);
+  const python = spawnSync(
+    "python3",
+    [
+      "-c",
+      `
+import json
+from sdk.python.mailhub import _verification_input, MailHubClient, MailHubError, TransportResponse
+calls = []
+def transport(request, timeout):
+    calls.append(json.loads(request.data))
+    return TransportResponse(200, {}, json.dumps({"success": True, "data": {"match_scope": "platform", "match_reason": "explicit rule"}}).encode())
+sdk = MailHubClient("https://mailhub.example.test", "fictional-contract-sdk-key", transport=transport)
+request = {"vault_id": 7, "match": "platform", "sender": "auth"}
+assert sdk.lookup_verification(request).data["match_scope"] == "platform"
+assert calls == [request]
+for query in ({"vault_id": 7, "match": "platform"}, {"platform": "Example", "match": "platform"}, {"email": "user@example.test", "match": "mailbox"}):
+    _verification_input(query)
+for query in ({"vault_id": 7, "match": "all"}, {"email": "user@example.test", "match": "platform"}):
+    try:
+        sdk.lookup_verification(query)
+    except MailHubError as error:
+        assert error.code == "INVALID_ARGUMENT"
+    else:
+        raise AssertionError("Invalid match accepted")
+assert len(calls) == 1
+`,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(python.status, 0, python.stderr);
+});
+
+test("import preview plans and submitted merge/replace requests agree with the contract and preserve identity dimensions", async () => {
+  const f = await database();
+  try {
+    const identity = {
+      platform_name: "Import app",
+      account_email: "login@example.test",
+      email_source: "external",
+      username: "member",
+      workspace: "Team",
+      account_identifier: "member-42",
+      login_methods: ["google", "password"],
+    };
+    const created = await f.request("/api/vault", {
+      ...identity,
+      password: "kept-password",
+      totp_secret: "JBSWY3DPEHPK3PXP",
+      mailbox_address: "delivery@example.test",
+      registered_at: "2026-11-15T00:00:00Z",
+      remark: "before",
+    });
+    const id = created.data.data.id;
+    const incoming = {
+      ...identity,
+      login_methods: ["password", "google"],
+      remark: "after",
+    };
+    const raw_text = JSON.stringify([incoming]);
+    const preview = async (duplicate_mode = "update", update_mode?: string) => {
+      const body = {
+        raw_text,
+        duplicate_mode,
+        ...(update_mode ? { update_mode } : {}),
+      };
+      conforms(
+        operations.find((o) => o.operationId === "previewVaultImport")!.body!,
+        body,
+        "preview request",
+      );
+      const result = await f.request("/api/vault/import-preview", body);
+      assert.equal(result.response.status, 200, JSON.stringify(result.data));
+      responseConforms("previewVaultImport", result.data);
+      assert.equal(result.data.rows[0].existing_id, id);
+      return result.data.rows[0];
+    };
+    const skip = await preview("skip");
+    assert.equal(skip.action, "skip");
+    assert.deepEqual(skip.changed_fields, []);
+    const merge = await preview();
+    assert.equal(merge.action, "update");
+    assert.deepEqual(merge.changed_fields, ["remark"]);
+    const body = { raw_text, duplicate_mode: "update" };
+    conforms(schemas.VaultImport, body, "default merge import");
+    const imported = await f.request("/api/vault/import", body);
+    responseConforms("importVault", imported.data);
+    assert.equal(imported.data.updated, 1);
+    let detail = (await f.request(`/api/vault/${id}`)).data.data;
+    assert.equal(detail.password, "kept-password");
+    assert.equal(detail.totp_secret, "JBSWY3DPEHPK3PXP");
+    assert.equal(detail.mailbox_address, "delivery@example.test");
+    assert.equal(detail.registered_at, "2026-11-15T00:00:00.000Z");
+    const replace = await preview("update", "replace");
+    assert.equal(replace.action, "update");
+    for (const field of [
+      "password",
+      "totp_secret",
+      "mailbox_address",
+      "registered_at",
+    ])
+      assert.ok(replace.changed_fields.includes(field), field);
+    const replaced = await f.request("/api/vault/import", {
+      accounts: [incoming],
+      duplicate_mode: "update",
+      update_mode: "replace",
+    });
+    responseConforms("importVault", replaced.data);
+    assert.equal(replaced.data.updated, 1);
+    detail = (await f.request(`/api/vault/${id}`)).data.data;
+    for (const field of [
+      "password",
+      "totp_secret",
+      "mailbox_address",
+      "registered_at",
+    ])
+      assert.equal(detail[field], "", field);
+    const variants = [
+      { ...incoming, email_source: "gptmail" },
+      { ...incoming, workspace: "Other team" },
+      { ...incoming, account_identifier: "member-43" },
+      { ...incoming, login_methods: ["passkey"] },
+    ];
+    const distinct = await f.request("/api/vault/import-preview", {
+      raw_text: JSON.stringify(variants),
+      duplicate_mode: "update",
+      update_mode: "merge",
+    });
+    responseConforms("previewVaultImport", distinct.data);
+    assert.equal(distinct.data.valid_count, 4);
+    for (const row of distinct.data.rows) {
+      assert.equal(row.action, "create");
+      assert.equal("existing_id" in row, false);
+    }
+    assert.equal(
+      await db(f.env).count("platform_vault"),
+      1,
+      "preview is read-only",
+    );
+  } finally {
+    await f.dispose();
+  }
+});
 
 test("all catalog examples produce valid cURL/Python syntax and JavaScript requests with matching JSON bodies", async () => {
   const spec = openApi();
@@ -162,6 +609,11 @@ test("generated JavaScript parses 201/202 JSON, preserves binary downloads and u
     ],
     ["downloadDomainMailRaw", "binary", "/api/cf-mails/1/raw"],
     ["revokeScopedApiKey", "json", "/api/api-keys/REPLACE_ID"],
+    [
+      "getMailboxIdentity",
+      "json",
+      "/api/mailbox-identities/mailtm%3Auser%2Balias%40example.com",
+    ],
     [
       "retryWebhookDelivery",
       "json",
@@ -314,7 +766,7 @@ test("restore examples send the caller's stable Idempotency-Key in all languages
 test("OpenAPI covers every concrete route, has unique stable IDs and valid executable example schemas", () => {
   const spec = openApi();
   assert.equal(spec.openapi, "3.1.0");
-  assert.equal(operations.length, 138);
+  assert.equal(operations.length, 142);
   for (const [path, method, operationId] of [
     ["/api/outlook/oauth/start", "post", "startOutlookOAuth"],
     ["/api/outlook/oauth/callback", "get", "finishOutlookOAuth"],
@@ -1928,7 +2380,7 @@ test("backup manifest, encrypted export, both previews and actual atomic restore
     responseConforms("getBackupManifest", manifest.data);
     assert.equal(manifest.data.data.restore_available, true);
     assert.equal(manifest.data.data.tables.length, 13);
-    assert.equal(manifest.data.data.schema_version, 12);
+    assert.equal(manifest.data.data.schema_version, 13);
     assert.ok(manifest.data.data.tables.includes("platforms"));
     assert.ok(manifest.data.data.excluded.includes("R2 object contents"));
     const redacted = await f.request(

@@ -17,11 +17,9 @@ import {
   Pick,
   RefreshButton,
   SearchBox,
-  Pager,
 } from "@/components/common";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -43,7 +41,7 @@ import {
 } from "@/lib/api";
 import { useWorkspace } from "@/lib/context";
 import { mailHtml } from "@/lib/mail-html";
-import type { Mail, Vault } from "@/lib/types";
+import type { Mail } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useSmartPolling } from "@/hooks/use-smart-polling";
 import {
@@ -63,14 +61,7 @@ import {
   Users,
   Download,
 } from "lucide-react";
-import {
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type ReaderLayout = "modal" | "embedded";
 
@@ -144,106 +135,26 @@ function ReaderFrame({
   );
 }
 
-/** The list endpoint omits passwords/TOTP. Load only after an explicit expansion.
- * mailbox is an exact filter; defensively verify the returned address as well.
- */
+/** Always available, including for a disabled or disconnected mailbox. */
 export function RelatedVaultAccounts({
   email,
-  onOpen,
+  source = "cf_domain",
 }: {
   email: string;
-  onOpen?: () => void;
+  source?: string;
 }) {
   const w = useWorkspace();
-  const [expanded, setExpanded] = useState(false);
-  const [page, setPage] = useState(1);
-  const id = useId();
-  const address = email.trim().toLowerCase();
-  const rows = useResource<Vault[]>(
-    expanded && address
-      ? `/api/vault?${query({ mailbox: address, page, limit: 100 })}`
-      : null,
-    w.revision,
-  );
-  const accounts = (rows.result?.data || []).filter(
-    (row) => row.account_email.toLowerCase() === address,
-  );
-  useEffect(() => {
-    setExpanded(false);
-    setPage(1);
-  }, [address]);
-  if (!address) return null;
+  if (!email.trim()) return null;
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="self-start"
-        aria-expanded={expanded}
-        aria-controls={id}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <Users data-icon="inline-start" />
-        关联平台账号{expanded ? " · 收起" : ""}
-      </Button>
-      {expanded && (
-        <div
-          id={id}
-          className="flex min-w-0 flex-col gap-2 rounded-lg border p-3"
-        >
-          {rows.error ? (
-            <ErrorState message={rows.error} retry={rows.reload} />
-          ) : !rows.result ? (
-            <Loading />
-          ) : (
-            <>
-              {accounts.length ? (
-                accounts.map((account) => (
-                  <Button
-                    key={account.id}
-                    variant="outline"
-                    className="h-auto min-w-0 justify-between gap-2 py-2 text-left"
-                    onClick={() => {
-                      onOpen?.();
-                      w.vault({ id: account.id });
-                    }}
-                  >
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="truncate">{account.platform_name}</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {account.username || account.account_email}
-                      </span>
-                    </span>
-                    <Badge variant="secondary">
-                      {(
-                        {
-                          active: "已登记",
-                          pending: "待处理",
-                          banned: "已封禁",
-                          deprecated: "已停用",
-                        } as Record<string, string>
-                      )[account.status] || account.status}
-                    </Badge>
-                  </Button>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  本页没有与此收件地址完全匹配的账号。
-                </p>
-              )}
-              {(rows.result.total || 0) > 100 && (
-                <>
-                  <p className="text-xs text-muted-foreground">
-                    此邮箱关联超过 100 个账号，可翻页继续查看。
-                  </p>
-                  <Pager result={rows.result} page={page} setPage={setPage} />
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
+    <Button
+      variant="outline"
+      size="sm"
+      className="self-start"
+      onClick={() => w.identity({ address: email, source })}
+    >
+      <Users data-icon="inline-start" />
+      查看全部登记
+    </Button>
   );
 }
 const folderNames: [string, string][] = [
@@ -310,6 +221,9 @@ function OutlookReaderContent({
           className={cn("message-list-pane", message && "reader-mobile-hidden")}
           aria-label="邮件列表"
         >
+          <div className="px-3 pt-3">
+            <RelatedVaultAccounts email={email} source="outlook" />
+          </div>
           <div className="flex shrink-0 items-center gap-2 p-3">
             <Pick
               label="邮件文件夹"
@@ -500,7 +414,6 @@ function OutlookReaderContent({
                 mail={detail.result.data}
                 outlookId={id}
                 mailboxEmail={email}
-                onOpenAccount={layout === "embedded" ? undefined : close}
                 onCompose={rows.stop}
                 onDeleted={() => {
                   reset();
@@ -549,12 +462,7 @@ export function CfReader({
             <Loading />
           </div>
         ) : (
-          <MessageBody
-            key={id}
-            mail={r.result.data}
-            onDeleted={close}
-            onOpenAccount={layout === "embedded" ? undefined : close}
-          />
+          <MessageBody key={id} mail={r.result.data} onDeleted={close} />
         )}
       </div>
     </ReaderFrame>
@@ -565,14 +473,12 @@ function MessageBody({
   outlookId,
   onDeleted,
   mailboxEmail,
-  onOpenAccount,
   onCompose,
 }: {
   mail: Mail;
   outlookId?: number;
   onDeleted: () => void;
   mailboxEmail?: string;
-  onOpenAccount?: () => void;
   onCompose?: () => void;
 }) {
   const w = useWorkspace();
@@ -721,7 +627,7 @@ function MessageBody({
       <div className="px-4 pb-3 sm:px-5">
         <RelatedVaultAccounts
           email={mailboxEmail || mail.recipient || ""}
-          onOpen={onOpenAccount}
+          source={outlookId ? "outlook" : "cf_domain"}
         />
       </div>
       {action.error && (

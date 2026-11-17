@@ -413,6 +413,8 @@ export async function replyOutlookMail(
 }
 
 export interface CodeResult {
+  match_scope?: "platform" | "mailbox";
+  match_reason?: string;
   has_mail: boolean;
   code: string;
   link: string;

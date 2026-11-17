@@ -9,6 +9,16 @@ export function clearSession() {
   for (const request of pending) request.abort();
   pending.clear();
 }
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+    public code?: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 export async function api<T = unknown>(
   path: string,
   method = "GET",
@@ -49,7 +59,11 @@ export async function api<T = unknown>(
     if (response.status === 401 && path !== "/api/auth/login")
       window.dispatchEvent(new Event("mailhub:unauthorized"));
     if (!response.ok || result.success === false)
-      throw new Error(result.message || "操作失败，请稍后重试");
+      throw new ApiError(
+        result.message || "操作失败，请稍后重试",
+        response.status,
+        result.error,
+      );
     return result;
   } finally {
     pending.delete(controller);

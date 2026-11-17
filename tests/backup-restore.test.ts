@@ -9,7 +9,10 @@ import backups, {
   validateBackup,
   type BackupDocument,
   type LegacyBackupDocument,
+  type Schema11BackupDocument,
+  type Schema12BackupDocument,
 } from "../src/routes/backups";
+import { registrationDefaults } from "../shared/registrations";
 import { createSessionToken, getSessionSecret } from "../src/auth";
 import { db } from "../src/storage/client";
 import type { Env } from "../src/types";
@@ -496,7 +499,7 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
   const f = await httpFixture();
   try {
     const manifest = await f.request("/manifest");
-    assert.equal(manifest.data.data.schema_version, 12);
+    assert.equal(manifest.data.data.schema_version, 13);
     assert.equal(manifest.data.data.tables.length, 13);
     assert.equal(manifest.data.data.restore_available, true);
     const backup = await f.exportFile();
@@ -590,9 +593,13 @@ test("HTTP export-preview-restore encrypts business credentials once, preserves 
   }
 });
 
-async function rehash<T extends BackupDocument | LegacyBackupDocument>(
-  document: T,
-): Promise<T> {
+async function rehash<
+  T extends
+    | BackupDocument
+    | LegacyBackupDocument
+    | Schema11BackupDocument
+    | Schema12BackupDocument,
+>(document: T): Promise<T> {
   for (const [table, rows] of Object.entries(document.tables)) {
     document.manifest.table_counts[table] = rows.length;
     document.manifest.table_hashes[table] = await digest(rows);
@@ -604,11 +611,173 @@ async function rehash<T extends BackupDocument | LegacyBackupDocument>(
 // Captured from the released schema 10 exporter, independent of the current model.
 const SCHEMA_10_HASH =
   "1d98b24a791a91074f2772ae9f11d3c94ee4b3b12f611d0a5f3be69166c2e846";
+// Captured from the released schema 12 exporter before registration metadata.
+const SCHEMA_12_HASH =
+  "72aa98743ab083b912db09f37b2e8878b1e5a541b9ecbaf6de361dc77fd66beb";
+const SCHEMA_11_HASH =
+  "1b47ae4e2ed3d92d1618bc1cde4be774a20d5fb162649fb2bf61d0a893ca7d8c";
+const REGISTRATION_FIELDS = Object.keys(
+  registrationDefaults,
+) as (keyof typeof registrationDefaults)[];
+
+// Literal schema 12 rows must not depend on defaults() or the current exporter.
+async function frozenSchema12Backup(): Promise<Schema12BackupDocument> {
+  return rehash({
+    manifest: {
+      format: "mailhub-backup",
+      version: 1,
+      schema_version: 12,
+      schema_hash: SCHEMA_12_HASH,
+      created_at: "2024-03-01T00:00:00.000Z",
+      redacted: false,
+      restorable: true,
+      consistency: "revision_checked",
+      table_counts: {},
+      table_hashes: {},
+      data_hash: "",
+      excluded: [
+        "administrator/session secrets",
+        "API keys",
+        "OAuth sessions",
+        "idempotency records",
+        "audit logs",
+        "webhook configuration and delivery queue",
+        "storage connections/coordinator state",
+        "Worker secrets/configuration",
+        "R2 object contents",
+      ],
+      external_dependencies: [
+        "R2 objects referenced by raw_object_key/attachment_manifest must be retained in the destination bucket",
+        "Domain routing, provider access and Worker environment configuration must be configured separately",
+      ],
+    },
+    tables: {
+      settings: [],
+      groups: [],
+      tags: [],
+      accounts: [],
+      account_tags: [],
+      cf_inbox_mails: [],
+      mail_rules: [],
+      platform_vault: [
+        {
+          id: 31,
+          platform_name: "Historical",
+          platform_url: "historical URL kept verbatim",
+          account_email: "LOGIN@Example.test",
+          email_source: "cf_domain",
+          username: "unchanged username",
+          password: "schema-12-password",
+          totp_secret: null,
+          status: "banned",
+          category: "历史分类",
+          proxy_node: "",
+          remark: "manual status and note survive",
+          last_code: "123456",
+          last_code_at: "2024-02-29T10:00:00.000Z",
+          is_pinned: 1,
+          created_at: "2024-02-01T00:00:00.000Z",
+          updated_at: "2024-02-29T00:00:00.000Z",
+        },
+      ],
+      platforms: [
+        {
+          name_key: "historical",
+          name: "Historical",
+          url: "https://example.test/platform",
+          category: "历史分类",
+          remark: "catalog preserved",
+          is_pinned: 1,
+          created_at: "2024-01-01T00:00:00.000Z",
+          updated_at: "2024-02-01T00:00:00.000Z",
+        },
+      ],
+      provider_accounts: [
+        {
+          id: 17,
+          provider: "mailtm",
+          address: "provider@example.test",
+          remote_id: "provider-id",
+          password: "provider-password",
+          token: "provider-token",
+          token_expires_at: "",
+          credential_version: "v1",
+          status: "disabled",
+          auth_status: "unchecked",
+          remark: "provider note",
+          last_checked_at: "",
+          last_error: "",
+          last_error_code: "",
+          created_at: "2024-02-01T00:00:00.000Z",
+          updated_at: "2024-02-02T00:00:00.000Z",
+        },
+      ],
+      temp_emails: [],
+      temp_mailboxes: [
+        {
+          id: 23,
+          address: "login@example.test",
+          prefix: "login",
+          domain: "example.test",
+          expires_at: "",
+          is_permanent: 1,
+          associated_platform: "Historical",
+          associated_vault_id: 31,
+          remark: "protected mailbox",
+          is_pinned: 1,
+          created_at: "2024-02-01T00:00:00.000Z",
+          updated_at: "2024-02-29T00:00:00.000Z",
+        },
+      ],
+      domains: [],
+    },
+  });
+}
+
+async function schema12Backup(
+  document: BackupDocument,
+): Promise<Schema12BackupDocument> {
+  const copy = structuredClone(document);
+  for (const row of copy.tables.platform_vault)
+    for (const field of REGISTRATION_FIELDS) delete row[field];
+  return rehash({
+    ...copy,
+    manifest: {
+      ...copy.manifest,
+      schema_version: 12,
+      schema_hash: SCHEMA_12_HASH,
+    },
+  });
+}
+
+async function schema11Backup(
+  document: BackupDocument,
+): Promise<Schema11BackupDocument> {
+  const copy = await schema12Backup(document);
+  const { provider_accounts: _providers, ...tables } = copy.tables;
+  delete copy.manifest.table_counts.provider_accounts;
+  delete copy.manifest.table_hashes.provider_accounts;
+  return rehash({
+    manifest: {
+      ...copy.manifest,
+      schema_version: 11,
+      schema_hash: SCHEMA_11_HASH,
+    },
+    tables,
+  });
+}
+
 async function legacyBackup(
   document: BackupDocument,
 ): Promise<LegacyBackupDocument> {
   const copy = structuredClone(document);
-  const { platforms: _platforms, provider_accounts: _providers, ...tables } = copy.tables;
+  for (const row of copy.tables.platform_vault)
+    for (const field of REGISTRATION_FIELDS) delete row[field];
+  const {
+    platforms: _platforms,
+    provider_accounts: _providers,
+    ...tables
+  } = copy.tables;
   delete copy.manifest.table_counts.provider_accounts;
   delete copy.manifest.table_hashes.provider_accounts;
   delete copy.manifest.table_counts.platforms;
@@ -650,11 +819,14 @@ test("schema 10 encrypted backups validate the released schema before determinis
       original,
       "conversion must not rewrite the uploaded document",
     );
-    assert.equal(converted.manifest.schema_version, 12);
+    assert.equal(converted.manifest.schema_version, 13);
     assert.equal(Object.keys(converted.tables).length, 13);
     assert.deepEqual(
       converted.tables.platform_vault,
-      legacy.tables.platform_vault,
+      legacy.tables.platform_vault.map((row) => ({
+        ...registrationDefaults,
+        ...row,
+      })),
     );
     assert.deepEqual(converted.tables.platforms, [
       {
@@ -695,7 +867,7 @@ test("schema 10 encrypted backups validate the released schema before determinis
     );
     assert.deepEqual(
       await db(f.env).select("platform_vault", { order: [["id", "asc"]] }),
-      legacy.tables.platform_vault,
+      converted.tables.platform_vault,
     );
     assert.equal(
       await db(f.env).count("platforms", eq("name_key", "empty")),
@@ -730,6 +902,343 @@ test("schema 10 redacted plaintext remains preview-only and upgrades without int
       400,
     );
     assert.equal((await f.coordinator.status()).active.generation, "legacy");
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("frozen schema 12 validates original fields and hashes before deterministic schema 13 upgrade", async () => {
+  const f = await httpFixture();
+  try {
+    const exported = await openBackup(await f.exportFile(), PASSPHRASE);
+    const legacy = await frozenSchema12Backup();
+    const original = structuredClone(legacy);
+    assert.equal(legacy.manifest.schema_hash, SCHEMA_12_HASH);
+    assert.equal(
+      REGISTRATION_FIELDS.some(
+        (field: string) => field in legacy.tables.platform_vault[0],
+      ),
+      false,
+    );
+
+    const converted = await validateBackup(legacy);
+    assert.deepEqual(legacy, original);
+    assert.equal(converted.manifest.schema_version, 13);
+    assert.deepEqual(
+      Object.fromEntries(
+        REGISTRATION_FIELDS.map((field: string) => [
+          field,
+          converted.tables.platform_vault[0][field],
+        ]),
+      ),
+      registrationDefaults,
+    );
+    assert.equal(
+      converted.tables.platform_vault[0].id,
+      legacy.tables.platform_vault[0].id,
+    );
+    assert.equal(
+      converted.tables.platform_vault[0].password,
+      "schema-12-password",
+    );
+    assert.equal(converted.tables.platform_vault[0].status, "banned");
+    assert.equal(
+      converted.tables.platform_vault[0].remark,
+      "manual status and note survive",
+    );
+    assert.deepEqual(
+      converted.tables.platform_vault,
+      legacy.tables.platform_vault.map((row) => ({
+        ...registrationDefaults,
+        ...row,
+      })),
+    );
+    assert.deepEqual(
+      converted.tables.provider_accounts,
+      legacy.tables.provider_accounts,
+    );
+    assert.deepEqual(converted.tables.platforms, legacy.tables.platforms);
+    assert.deepEqual(
+      converted.tables.temp_mailboxes,
+      legacy.tables.temp_mailboxes,
+    );
+    assert.deepEqual(await validateBackup(legacy), converted);
+    const backup = await sealBackup(legacy, PASSPHRASE);
+    assert.deepEqual(await openBackup(backup, PASSPHRASE), converted);
+
+    for (const alter of [
+      (d: Schema12BackupDocument) => {
+        d.manifest.schema_hash = exported.manifest.schema_hash;
+      },
+      (d: Schema12BackupDocument) => {
+        delete d.tables.platform_vault[0].totp_secret;
+      },
+      (d: Schema12BackupDocument) => {
+        d.tables.provider_accounts[0].extra = "not-in-schema12";
+      },
+      ...REGISTRATION_FIELDS.map((field) => (d: Schema12BackupDocument) => {
+        d.tables.platform_vault[0][field] = registrationDefaults[field];
+      }),
+    ]) {
+      const tampered = structuredClone(legacy);
+      alter(tampered);
+      await rehash(tampered);
+      await assert.rejects(validateBackup(tampered));
+      await assert.rejects(
+        openBackup(await sealBackup(tampered, PASSPHRASE), PASSPHRASE),
+      );
+    }
+
+    const rowTampered = structuredClone(legacy);
+    rowTampered.tables.platform_vault[0].status = "active";
+    await assert.rejects(validateBackup(rowTampered), /哈希/);
+    rowTampered.manifest.table_hashes.platform_vault = await digest(
+      rowTampered.tables.platform_vault,
+    );
+    await assert.rejects(validateBackup(rowTampered), /整体哈希/);
+
+    const preview = await f.request("/preview", {
+      backup,
+      passphrase: PASSPHRASE,
+    });
+    assert.equal(preview.response.status, 200, JSON.stringify(preview.data));
+    assert.equal(preview.data.data.backup_hash, await digest(converted));
+    const restored = await f.request(
+      "/restore",
+      {
+        backup,
+        passphrase: PASSPHRASE,
+        confirmation_token: preview.data.data.confirmation_token,
+        confirm: "RESTORE_BACKUP",
+      },
+      "restore-frozen-schema-12",
+    );
+    assert.equal(restored.response.status, 200, JSON.stringify(restored.data));
+    assert.deepEqual(await db(f.env).select("platform_vault"), [
+      { ...converted.tables.platform_vault[0], totp_secret: "" },
+    ]);
+    assert.deepEqual(
+      await db(f.env).select("provider_accounts"),
+      legacy.tables.provider_accounts,
+    );
+    assert.deepEqual(
+      await db(f.env).select("temp_mailboxes"),
+      legacy.tables.temp_mailboxes,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("schema 11 and redacted schema 12 upgrade without requiring new fields in old projections", async () => {
+  const f = await httpFixture();
+  try {
+    const encrypted = await openBackup(await f.exportFile(), PASSPHRASE);
+    const schema11 = await schema11Backup(encrypted);
+    const upgraded11 = await validateBackup(schema11);
+    assert.equal(upgraded11.manifest.schema_version, 13);
+    assert.deepEqual(upgraded11.tables.provider_accounts, []);
+    assert.deepEqual(await validateBackup(schema11), upgraded11);
+    const smuggled = structuredClone(schema11);
+    smuggled.tables.platform_vault[0].workspace = "not-a-schema11-field";
+    await assert.rejects(validateBackup(await rehash(smuggled)));
+    const tampered = structuredClone(schema11);
+    tampered.tables.platform_vault[0].status = "banned";
+    await assert.rejects(validateBackup(tampered), /哈希/);
+    tampered.manifest.table_hashes.platform_vault = await digest(
+      tampered.tables.platform_vault,
+    );
+    await assert.rejects(validateBackup(tampered), /整体哈希/);
+    assert.deepEqual(
+      Object.fromEntries(
+        REGISTRATION_FIELDS.map((field: string) => [
+          field,
+          upgraded11.tables.platform_vault[0][field],
+        ]),
+      ),
+      registrationDefaults,
+    );
+
+    const currentRedacted = (await f.request("/export")).data;
+    for (const project of [schema11Backup, schema12Backup]) {
+      const legacyRedacted = await project(currentRedacted);
+      const original = structuredClone(legacyRedacted);
+      assert.equal(
+        REGISTRATION_FIELDS.some(
+          (field) => field in legacyRedacted.tables.platform_vault[0],
+        ),
+        false,
+      );
+      const upgradedRedacted = await validateBackup(legacyRedacted);
+      assert.deepEqual(legacyRedacted, original);
+      assert.equal(upgradedRedacted.manifest.schema_version, 13);
+      assert.equal(upgradedRedacted.manifest.redacted, true);
+      assert.equal(upgradedRedacted.manifest.restorable, false);
+      assert.deepEqual(
+        Object.fromEntries(
+          REGISTRATION_FIELDS.map((field) => [
+            field,
+            upgradedRedacted.tables.platform_vault[0][field],
+          ]),
+        ),
+        registrationDefaults,
+      );
+      assert.ok(!("password" in upgradedRedacted.tables.platform_vault[0]));
+      assert.ok(!("totp_secret" in upgradedRedacted.tables.platform_vault[0]));
+      const preview = await f.request("/preview", { backup: legacyRedacted });
+      assert.equal(preview.response.status, 200, JSON.stringify(preview.data));
+      assert.equal(preview.data.data.restorable, false);
+      assert.equal(preview.data.data.confirmation_token, undefined);
+
+      const addedMetadata = structuredClone(legacyRedacted);
+      addedMetadata.tables.platform_vault[0].mailbox_link_state = "detached";
+      await assert.rejects(validateBackup(await rehash(addedMetadata)));
+    }
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("schema 13 validates and restores registration metadata, detached state and mailbox-address aliases", async () => {
+  const f = await httpFixture();
+  try {
+    const fixedTimes = {
+      registered_at: "2024-02-29T20:30:00+08:00",
+      last_verified_at: "2025-03-01T08:09:10.000Z",
+      expires_at: "2030-01-01T00:00:00.000Z",
+    };
+    await db(f.env).mutate([
+      update("platform_vault", eq("id", 1), {
+        email_source: "cf_domain",
+        mailbox_address: "alias@example.test",
+        mailbox_link_state: "auto",
+        workspace: "Europe",
+        account_identifier: "tenant-7",
+        login_methods: '[ "password", "google", "password" ]',
+        verification_sender: "auth@example.test",
+        verification_keyword: "Your code",
+        ...fixedTimes,
+      }),
+      insert("temp_mailboxes", {
+        address: "alias@example.test",
+        prefix: "alias",
+        domain: "example.test",
+        is_permanent: 1,
+        associated_platform: "Saved",
+        associated_vault_id: 1,
+      }),
+      insert("platform_vault", {
+        platform_name: "Detached",
+        account_email: "detached@example.test",
+        email_source: "external",
+        password: "detached-password",
+        status: "banned",
+        mailbox_link_state: "detached",
+      }),
+    ]);
+
+    const backup = await f.exportFile();
+    const document = await openBackup(backup, PASSPHRASE);
+    assert.equal(document.manifest.schema_version, 13);
+    assert.equal(document.tables.temp_mailboxes[0].associated_vault_id, 1);
+    assert.equal(
+      document.tables.platform_vault[0].mailbox_address,
+      "alias@example.test",
+    );
+    assert.equal(
+      document.tables.platform_vault[1].mailbox_link_state,
+      "detached",
+    );
+
+    for (const [field, value] of [
+      ["workspace", "x".repeat(101)],
+      ["account_identifier", "x".repeat(201)],
+      ["login_methods", '["unsupported"]'],
+      ["login_methods", "not-json"],
+      ["mailbox_address", "invalid-mailbox"],
+      ["mailbox_link_state", "pending"],
+      ["verification_sender", "x".repeat(255)],
+      ["verification_keyword", "x".repeat(201)],
+      ["registered_at", "not-a-date"],
+      ["last_verified_at", "2024-02-30T00:00:00.000Z"],
+      ["expires_at", "2030-01-01T00:00:00"],
+      ...REGISTRATION_FIELDS.map((field) => [field, null]),
+    ] as [string, Row[string]][]) {
+      const invalidMetadata = structuredClone(document);
+      invalidMetadata.tables.platform_vault[0][field] = value;
+      await assert.rejects(
+        validateBackup(await rehash(invalidMetadata)),
+        field,
+      );
+    }
+
+    const wrongAddress = structuredClone(document);
+    wrongAddress.tables.temp_mailboxes[0].address = "saved@example.test";
+    wrongAddress.tables.temp_mailboxes[0].prefix = "saved";
+    await assert.rejects(
+      validateBackup(await rehash(wrongAddress)),
+      /地址不一致/,
+    );
+    wrongAddress.tables.platform_vault[0].mailbox_address = "";
+    await assert.doesNotReject(validateBackup(await rehash(wrongAddress)));
+
+    const redacted = await f.request("/export");
+    assert.equal(redacted.response.status, 200);
+    const redactedVault = redacted.data.tables.platform_vault[0];
+    assert.equal(redactedVault.workspace, "Europe");
+    assert.equal(redactedVault.mailbox_address, "alias@example.test");
+    assert.equal(redactedVault.mailbox_link_state, "auto");
+    assert.deepEqual(
+      Object.fromEntries(
+        REGISTRATION_FIELDS.map((field) => [field, redactedVault[field]]),
+      ),
+      Object.fromEntries(
+        REGISTRATION_FIELDS.map((field) => [
+          field,
+          document.tables.platform_vault[0][field],
+        ]),
+      ),
+    );
+    assert.ok(!("password" in redactedVault));
+    assert.ok(!("totp_secret" in redactedVault));
+    assert.ok(!("last_code" in redactedVault));
+    assert.ok(!("remark" in redactedVault));
+    await validateBackup(redacted.data);
+
+    const preview = await f.request("/preview", {
+      backup,
+      passphrase: PASSPHRASE,
+    });
+    assert.equal(preview.response.status, 200, JSON.stringify(preview.data));
+    const restored = await f.request(
+      "/restore",
+      {
+        backup,
+        passphrase: PASSPHRASE,
+        confirmation_token: preview.data.data.confirmation_token,
+        confirm: "RESTORE_BACKUP",
+      },
+      "restore-registration-metadata",
+    );
+    assert.equal(restored.response.status, 200, JSON.stringify(restored.data));
+
+    const restoredVault = await db(f.env).select("platform_vault", {
+      order: [["id", "asc"]],
+    });
+    assert.deepEqual(restoredVault, document.tables.platform_vault);
+    assert.equal(restoredVault[0].id, 1);
+    assert.equal(restoredVault[0].mailbox_address, "alias@example.test");
+    assert.equal(
+      restoredVault[0].login_methods,
+      '[ "password", "google", "password" ]',
+    );
+    assert.equal(restoredVault[0].registered_at, fixedTimes.registered_at);
+    assert.equal(restoredVault[0].password, "vault-plaintext");
+    assert.equal(restoredVault[1].mailbox_link_state, "detached");
+    assert.equal(restoredVault[1].status, "banned");
+    const restoredMailbox = await db(f.env).first("temp_mailboxes");
+    assert.equal(restoredMailbox?.address, "alias@example.test");
+    assert.equal(restoredMailbox?.associated_vault_id, 1);
   } finally {
     await f.dispose();
   }
@@ -779,7 +1288,7 @@ test("schema 10 cannot smuggle schema 11 tables or new fields and rejects origin
     );
     await assert.rejects(validateBackup(changed), /整体哈希/);
     const disguised = structuredClone(current);
-    disguised.manifest.schema_version = 10 as 12;
+    disguised.manifest.schema_version = 10 as 13;
     disguised.manifest.schema_hash = SCHEMA_10_HASH;
     await assert.rejects(validateBackup(disguised));
     assert.equal((await f.coordinator.status()).active.generation, "legacy");
@@ -807,7 +1316,7 @@ test("backup validation rejects authenticated schema, type, reference, uniquenes
     await assert.rejects(openBackup(backup, "wrong-passphrase-1234"));
     for (const change of [
       (d: BackupDocument) => {
-        d.manifest.schema_version = 7 as 12;
+        d.manifest.schema_version = 7 as 13;
       },
       (d: BackupDocument) => {
         d.tables.accounts[0].id = "1";

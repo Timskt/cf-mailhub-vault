@@ -34,6 +34,10 @@
       "description": "平台账号接口与工作流"
     },
     {
+      "name": "邮箱身份",
+      "description": "邮箱身份接口与工作流"
+    },
+    {
       "name": "自建邮箱",
       "description": "自建邮箱接口与工作流"
     },
@@ -449,7 +453,7 @@
       "post": {
         "operationId": "inspectMailbox",
         "summary": "诊断邮箱接入状态",
-        "description": "按 email、vault_id 或唯一 platform 定位。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。",
+        "description": "按 email、vault_id 或唯一 platform 定位。台账使用 mailbox_address（空则 account_email）与 email_source；detached 返回 409 MAILBOX_DETACHED。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。",
         "tags": [
           "自动化"
         ],
@@ -611,7 +615,7 @@
       "post": {
         "operationId": "lookupVerification",
         "summary": "统一查收验证码与验证链接",
-        "description": "CF 与 Outlook 统一返回 data；outcome=found 或 empty。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。",
+        "description": "CF、Outlook、Mail.tm/Mail.gw 统一返回 data；outcome=found 或 empty。match 默认为 mailbox，仅表示在邮箱中找到验证信息，不确认归属平台。match=platform 要求 vault_id 或唯一 platform，并按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配；无规则 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。直接 email 使用 platform 模式返回 400 PLATFORM_TARGET_REQUIRED。台账按有效收件地址与来源查收，detached 返回 409 MAILBOX_DETACHED。台账目标额外返回 match_scope/match_reason。保存平台历史验证码前以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码。过滤用于业务匹配，不提供邮件隔离。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。",
         "tags": [
           "自动化"
         ],
@@ -669,7 +673,7 @@
           "unknown_outcome": "never_automatically_reexecute",
           "expired_complete": "may_be_removed_no_deduplication_guarantee"
         },
-        "x-side-effects": "Outlook 会刷新并保存令牌及连接状态；不标已读、不打开链接",
+        "x-side-effects": "邮箱提供商可刷新令牌及连接状态；仅 match=platform 找到验证码且目标与规则未变时保存平台历史；不标已读、不打开链接",
         "x-credential-response": false,
         "x-request-body-max-bytes": 2097152,
         "requestBody": {
@@ -790,7 +794,7 @@
       "post": {
         "operationId": "batchLookupVerification",
         "summary": "批量查收，逐项报告结果",
-        "description": "每批 1–5 项。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。",
+        "description": "每批 1–5 项，各项均支持 match=mailbox|platform（默认 mailbox），目标和规则要求同 lookupVerification。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。",
         "tags": [
           "自动化"
         ],
@@ -881,6 +885,8 @@
                   },
                   {
                     "vault_id": 1,
+                    "match": "platform",
+                    "sender": "auth",
                     "since": "2026-11-15T00:00:00Z"
                   }
                 ]
@@ -976,7 +982,7 @@
       "get": {
         "operationId": "lookupCodeLegacy",
         "summary": "兼容取码接口",
-        "description": "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。",
+        "description": "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。无显式 email 时解析唯一 platform，按 mailbox_address（空则 account_email）与 email_source 查收；多账号返回 409 AMBIGUOUS_TARGET，目标不存在返回 404 TARGET_NOT_FOUND，detached 返回 409 MAILBOX_DETACHED。显式 email 始终优先，即使同时传 platform 也保持邮箱范围查询，不应用平台注册的验证规则或 detached 状态。两种目标均仅按本次 since/sender/q 过滤，不更新平台历史验证码。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。",
         "tags": [
           "自动化"
         ],
@@ -1014,7 +1020,7 @@
               "maxLength": 254,
               "format": "email"
             },
-            "description": "邮箱地址",
+            "description": "显式邮箱地址优先于 platform，保持邮箱范围查询",
             "example": "user@example.com"
           },
           {
@@ -1024,7 +1030,7 @@
               "type": "string",
               "maxLength": 100
             },
-            "description": "唯一平台名称，email 优先"
+            "description": "无 email 时解析唯一平台注册，使用 mailbox_address（空则 account_email）与 email_source"
           },
           {
             "name": "since",
@@ -2175,7 +2181,7 @@
       "get": {
         "operationId": "listVaultAccounts",
         "summary": "分页筛选平台账号",
-        "description": "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配邮箱且不区分大小写；响应 mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。",
+        "description": "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配有效收件地址（mailbox_address 空则 account_email）且不区分大小写，email_source 可限定来源。响应含 registration 元数据，login_methods 为 JSON 数组字符串。mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。",
         "tags": [
           "平台账号"
         ],
@@ -2230,7 +2236,7 @@
               "maxLength": 254,
               "format": "email"
             },
-            "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页"
+            "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页"
           },
           {
             "name": "platform",
@@ -2423,7 +2429,7 @@
       "post": {
         "operationId": "createVaultAccount",
         "summary": "登记平台账号",
-        "description": "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。现有 CF 邮箱会被关联保护。",
+        "description": "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。支持 registration 元数据、登录方式及验证规则。mailbox_address 为空时回退 account_email，别名须显式映射；按有效地址与 email_source 关联并保护 CF 邮件。detached 停止此平台注册自动查收，仍保留保留保护。日期只接受空字符串或含时区 ISO 8601，不推断。",
         "tags": [
           "平台账号"
         ],
@@ -2556,6 +2562,136 @@
                   "remark": {
                     "type": "string",
                     "maxLength": 4000
+                  },
+                  "is_pinned": {
+                    "type": [
+                      "integer",
+                      "boolean"
+                    ],
+                    "enum": [
+                      0,
+                      1,
+                      false,
+                      true
+                    ]
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "default": ""
+                  },
+                  "account_identifier": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "default": ""
+                  },
+                  "login_methods": {
+                    "oneOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "password",
+                            "google",
+                            "microsoft",
+                            "sso",
+                            "magic_link",
+                            "passkey",
+                            "unknown"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 1000,
+                        "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+                        "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+                      },
+                      {
+                        "type": "string",
+                        "const": ""
+                      }
+                    ],
+                    "default": "[\"unknown\"]",
+                    "description": "接受数组或 JSON 数组字符串；省略、空字符串或空数组默认为 [\"unknown\"]。"
+                  },
+                  "mailbox_address": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 254,
+                        "format": "email"
+                      },
+                      {
+                        "type": "string",
+                        "const": ""
+                      }
+                    ],
+                    "default": "",
+                    "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+                  },
+                  "mailbox_link_state": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "detached",
+                      ""
+                    ],
+                    "default": "auto",
+                    "description": "省略或空字符串归一为 auto；auto 按有效收件地址与 email_source 关联；detached 保留台账和保留保护，停止该平台注册的自动查收。"
+                  },
+                  "verification_sender": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "default": ""
+                  },
+                  "verification_keyword": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "default": ""
+                  },
+                  "registered_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+                  },
+                  "last_verified_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+                  },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
                   },
                   "generate_email": {
                     "type": "boolean"
@@ -2946,7 +3082,7 @@
               "maxLength": 254,
               "format": "email"
             },
-            "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页"
+            "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页"
           },
           {
             "name": "platform",
@@ -3438,7 +3574,7 @@
       "put": {
         "operationId": "updateVaultAccount",
         "summary": "编辑平台账号",
-        "description": "沿用现有行为，未提供字段保留原值。更新 CF 关联邮箱保护状态。",
+        "description": "未提供字段保留原值，明确空值可清除可选字段。支持 workspace/account_identifier/login_methods、mailbox_address/mailbox_link_state、验证规则和登记日期。按有效收件地址更新 CF 保护；detached 保留台账及保留保护。",
         "tags": [
           "平台账号"
         ],
@@ -3574,6 +3710,136 @@
                   "remark": {
                     "type": "string",
                     "maxLength": 4000
+                  },
+                  "is_pinned": {
+                    "type": [
+                      "integer",
+                      "boolean"
+                    ],
+                    "enum": [
+                      0,
+                      1,
+                      false,
+                      true
+                    ]
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "default": ""
+                  },
+                  "account_identifier": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "default": ""
+                  },
+                  "login_methods": {
+                    "oneOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "password",
+                            "google",
+                            "microsoft",
+                            "sso",
+                            "magic_link",
+                            "passkey",
+                            "unknown"
+                          ]
+                        }
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 1000,
+                        "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+                        "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+                      },
+                      {
+                        "type": "string",
+                        "const": ""
+                      }
+                    ],
+                    "default": "[\"unknown\"]",
+                    "description": "接受数组或 JSON 数组字符串；省略、空字符串或空数组默认为 [\"unknown\"]。"
+                  },
+                  "mailbox_address": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 254,
+                        "format": "email"
+                      },
+                      {
+                        "type": "string",
+                        "const": ""
+                      }
+                    ],
+                    "default": "",
+                    "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+                  },
+                  "mailbox_link_state": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "detached",
+                      ""
+                    ],
+                    "default": "auto",
+                    "description": "省略或空字符串归一为 auto；auto 按有效收件地址与 email_source 关联；detached 保留台账和保留保护，停止该平台注册的自动查收。"
+                  },
+                  "verification_sender": {
+                    "type": "string",
+                    "maxLength": 254,
+                    "default": ""
+                  },
+                  "verification_keyword": {
+                    "type": "string",
+                    "maxLength": 200,
+                    "default": ""
+                  },
+                  "registered_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+                  },
+                  "last_verified_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+                  },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": ""
+                      },
+                      {
+                        "type": "string",
+                        "maxLength": 40,
+                        "format": "date-time"
+                      }
+                    ],
+                    "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
                   }
                 },
                 "additionalProperties": true
@@ -3978,7 +4244,7 @@
       "get": {
         "operationId": "lookupVaultCode",
         "summary": "查收台账账号验证码",
-        "description": "查收台账账号验证码",
+        "description": "按 mailbox_address（空则 account_email）与 email_source 查收。match 默认 mailbox，返回 match_scope/match_reason，邮箱结果不能确认归属平台；platform 按显式 sender/q 或登记规则匹配，无规则返回 409 VERIFICATION_RULE_REQUIRED。detached 返回 409 MAILBOX_DETACHED；不自动回退整个邮箱。match=platform 找到验证码后，写入 last_code/last_code_at 前在同一事务中以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码，应刷新台账后重新查收。",
         "tags": [
           "平台账号"
         ],
@@ -4033,6 +4299,20 @@
               "maxLength": 200
             },
             "description": "邮件关键词"
+          },
+          {
+            "name": "match",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "mailbox",
+                "platform"
+              ],
+              "default": "mailbox",
+              "description": "mailbox 查询有效收件邮箱，不能确认属于某平台且不更新平台历史验证码；platform 仅用于 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配，缺少规则返回 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。"
+            },
+            "description": "mailbox 查询有效收件邮箱，不能确认属于某平台且不更新平台历史验证码；platform 仅用于 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配，缺少规则返回 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。"
           }
         ],
         "x-auth-mode": "admin",
@@ -4049,7 +4329,7 @@
         "x-idempotency": {
           "supported": false
         },
-        "x-side-effects": "保存最近验证码；Outlook 刷新令牌及状态",
+        "x-side-effects": "仅 match=platform 找到验证码且 CAS 校验通过时保存平台历史；邮箱提供商可刷新令牌及状态",
         "x-credential-response": false,
         "responses": {
           "200": {
@@ -4168,7 +4448,7 @@
               "maxLength": 254,
               "format": "email"
             },
-            "description": "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页"
+            "description": "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页"
           },
           {
             "name": "platform",
@@ -4347,7 +4627,7 @@
       "post": {
         "operationId": "previewVaultImport",
         "summary": "脱敏预览平台账号文本导入",
-        "description": "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复，不检查库中已有账号。platform_name 用于补全缺失的平台名。",
+        "description": "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。结合库中现状及 duplicate_mode（skip|update，默认 skip）、update_mode（merge|replace，默认 merge）计算 rows[].action=create|update|skip、changed_fields 和可选 existing_id；provided_fields 表示输入明确提供的字段。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复。platform_name 用于补全缺失的平台名。预览不锁定库中状态，提交时重新检查。",
         "tags": [
           "平台账号"
         ],
@@ -4405,7 +4685,7 @@
           "unknown_outcome": "never_automatically_reexecute",
           "expired_complete": "may_be_removed_no_deduplication_guarantee"
         },
-        "x-side-effects": "只读解析，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
+        "x-side-effects": "只读解析及比对现有账号，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
         "x-credential-response": false,
         "x-request-body-max-bytes": 2097152,
         "requestBody": {
@@ -4424,6 +4704,23 @@
                   "platform_name": {
                     "type": "string",
                     "maxLength": 100
+                  },
+                  "duplicate_mode": {
+                    "type": "string",
+                    "enum": [
+                      "skip",
+                      "update"
+                    ],
+                    "default": "skip"
+                  },
+                  "update_mode": {
+                    "type": "string",
+                    "enum": [
+                      "merge",
+                      "replace"
+                    ],
+                    "default": "merge",
+                    "description": "duplicate_mode=update 时生效；merge 仅写明确提供的字段，replace 将省略字段恢复默认值。明确提供空值可清空字段。"
                   }
                 },
                 "required": [
@@ -4432,7 +4729,9 @@
                 "additionalProperties": true
               },
               "example": {
-                "raw_text": "platform_name----account_email----password----email_source\nExample----user@example.com----Example-password-42----external"
+                "raw_text": "platform_name----account_email----password----email_source\nExample----user@example.com----Example-password-42----external",
+                "duplicate_mode": "update",
+                "update_mode": "merge"
               }
             }
           }
@@ -4508,7 +4807,7 @@
       "post": {
         "operationId": "importVault",
         "summary": "导入平台台账",
-        "description": "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。按不区分大小写的平台名、规范化邮箱及原样用户名识别重复，文件内同身份最后一条生效。duplicate_mode 默认 skip；显式 update 会使用导入记录完整更新已有账号，未提供的可选字段使用默认值。返回 created/updated/skipped 与文件内 duplicate_count；CF 地址自动保护。",
+        "description": "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。重复身份包含不区分大小写的平台名/规范化账号邮箱、原样 username、email_source、workspace、account_identifier 与规范化 login_methods；文件内同身份最后一条生效。accounts[] 省略来源默认 cf_domain；raw_text 省略来源时微软邮箱推断 outlook，其余 external。省略身份字段按默认值精确匹配，不作为通配条件。duplicate_mode 默认 skip；update_mode 默认 merge，仅更新输入明确提供的字段，省略的密码、TOTP 和元数据保留。明确 replace 才将省略可选字段恢复默认；明确空值可清除字段。返回 created/updated/skipped 与文件内 duplicate_count；按有效收件地址保护 CF 邮件。",
         "tags": [
           "平台账号"
         ],
@@ -4583,7 +4882,9 @@
                     "account_email": "user@example.com",
                     "email_source": "cf_domain"
                   }
-                ]
+                ],
+                "duplicate_mode": "update",
+                "update_mode": "merge"
               }
             }
           }
@@ -4618,6 +4919,619 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VaultImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/mailbox-identities": {
+      "get": {
+        "operationId": "listMailboxIdentities",
+        "summary": "分页查询邮箱身份",
+        "description": "按来源和有效收件地址聚合已有连接及未接入的平台注册。支持 q/source/page/limit；total 是筛选后的身份数，summary 是全局汇总，不随筛选和分页改变。身份 id 为 source:小写地址，不能使用数字 ID。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。仅 admin grant、主密钥或管理员会话；这是 admin collection，资源受限 Key 一律 403 RESOURCE_SCOPE_REQUIRED，过滤条件不能解锁。",
+        "tags": [
+          "邮箱身份"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "页码，从 1 开始"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            },
+            "description": "每页条数"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "地址或关联平台名称，包含匹配"
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "cf_domain",
+                "outlook",
+                "gptmail",
+                "external",
+                "mailtm",
+                "mailgw"
+              ]
+            },
+            "description": "精确邮箱来源"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "collection": true,
+          "resource_restricted_keys_allowed": false,
+          "description": "admin collection；主密钥、无资源限制的 admin Key 或管理员会话。资源受限 Key 对整个路由族均返回 403 RESOURCE_SCOPE_REQUIRED，指定 ID 或筛选也不能枚举。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MailboxIdentity"
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "summary": {
+                      "$ref": "#/components/schemas/MailboxIdentitySummary"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "page",
+                    "limit",
+                    "total",
+                    "summary"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/mailbox-identities/{id}": {
+      "get": {
+        "operationId": "getMailboxIdentity",
+        "summary": "读取邮箱身份与连接状态",
+        "description": "整个 source:address ID 须作为一个路径段 URL 编码。按有效收件地址与来源区分身份；返回登记数量、平台、保留保护及记录的连接健康状态，不返回邮箱凭据。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+        "tags": [
+          "邮箱身份"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。",
+            "schema": {
+              "type": "string",
+              "maxLength": 264,
+              "pattern": "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+              "description": "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。"
+            },
+            "example": "mailtm:user+alias@example.com"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "collection": true,
+          "resource_restricted_keys_allowed": false,
+          "description": "admin collection；主密钥、无资源限制的 admin Key 或管理员会话。资源受限 Key 对整个路由族均返回 403 RESOURCE_SCOPE_REQUIRED，指定 ID 或筛选也不能枚举。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/MailboxIdentity"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/mailbox-identities/{id}/registrations": {
+      "get": {
+        "operationId": "listMailboxIdentityRegistrations",
+        "summary": "分页读取邮箱身份的平台注册",
+        "description": "整个 source:address ID 须 URL 编码。按 mailbox_address（空则 account_email）与精确 email_source 查询，包括 detached 台账；按 ID 升序分页。summary 汇总此身份全部平台及注册数，不受分页影响。返回 registration 元数据与 mailbox 健康，不含 password/totp_secret。无注册返回空数组。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+        "tags": [
+          "邮箱身份"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。",
+            "schema": {
+              "type": "string",
+              "maxLength": 264,
+              "pattern": "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+              "description": "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。"
+            },
+            "example": "mailtm:user+alias@example.com"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000,
+              "default": 1
+            },
+            "description": "页码，从 1 开始"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            },
+            "description": "每页条数"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "collection": true,
+          "resource_restricted_keys_allowed": false,
+          "description": "admin collection；主密钥、无资源限制的 admin Key 或管理员会话。资源受限 Key 对整个路由族均返回 403 RESOURCE_SCOPE_REQUIRED，指定 ID 或筛选也不能枚举。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/MailboxIdentityRegistration"
+                      }
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "total": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "platforms": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "registrations": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "platforms",
+                        "registrations"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data",
+                    "page",
+                    "limit",
+                    "total",
+                    "summary"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "401": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "403": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "404": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "409": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "413": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "429": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "500": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "502": {
+            "$ref": "#/components/responses/Failure"
+          },
+          "503": {
+            "$ref": "#/components/responses/Failure"
+          }
+        }
+      }
+    },
+    "/api/mailbox-identities/{id}/impact": {
+      "get": {
+        "operationId": "getMailboxIdentityImpact",
+        "summary": "读取邮箱身份关联影响与保护",
+        "description": "整个 source:address ID 须 URL 编码。返回 identity、注册总数和保留保护，供变更前核对影响；protected 包含永久邮箱或仍有注册引用，detached 不解除现有保留保护。affected_registrations 排除 detached。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+        "tags": [
+          "邮箱身份"
+        ],
+        "security": [
+          {
+            "ApiKey": []
+          },
+          {
+            "BearerAuth": []
+          },
+          {
+            "AdminSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。",
+            "schema": {
+              "type": "string",
+              "maxLength": 264,
+              "pattern": "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+              "description": "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。"
+            },
+            "example": "mailtm:user+alias@example.com"
+          }
+        ],
+        "x-auth-mode": "admin",
+        "x-authorization": {
+          "admin_session_only": false,
+          "required_grants": [
+            "admin"
+          ],
+          "grant_operator": "all",
+          "admin_scope_override": true,
+          "resource_restrictions_apply": true,
+          "collection": true,
+          "resource_restricted_keys_allowed": false,
+          "description": "admin collection；主密钥、无资源限制的 admin Key 或管理员会话。资源受限 Key 对整个路由族均返回 403 RESOURCE_SCOPE_REQUIRED，指定 ID 或筛选也不能枚举。"
+        },
+        "x-idempotency": {
+          "supported": false
+        },
+        "x-side-effects": "无业务写入",
+        "x-credential-response": false,
+        "responses": {
+          "200": {
+            "description": "请求完成。批量查收还须检查每项 success。",
+            "headers": {
+              "X-Request-ID": {
+                "description": "服务器生成的请求追踪 ID；反馈问题时可提供此值，无需提供密钥。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "identity": {
+                          "$ref": "#/components/schemas/MailboxIdentity"
+                        },
+                        "registrations": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "protected": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "identity",
+                        "registrations",
+                        "protected"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "additionalProperties": true
                 }
               }
             }
@@ -18016,7 +18930,7 @@
       "get": {
         "operationId": "getBackupManifest",
         "summary": "查询便携业务备份范围与限制",
-        "description": "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。",
+        "description": "schema 13 共 13 张业务表，包括独立 platforms（空平台也保留）、provider_accounts（外部邮箱密码与登录令牌）及 platform_vault 的 registration 元数据。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10/11/12 文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18364,7 +19278,7 @@
       "post": {
         "operationId": "dryRunBackup",
         "summary": "校验备份并预览恢复",
-        "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        "description": "dry-run 与 preview 为同一处理器。当前 schema 13，兼容已发布的 10/11/12；旧文件先验证冻结的原 schema hash、完整字段、逐表/整体 hash 及业务关联。10 补出 platforms，10/11 补空 provider_accounts；所有旧版本补齐 registration 默认值（login_methods=[\"unknown\"] 的 JSON 字符串、mailbox_link_state=auto，其余为空字符串）并计算 schema 13 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18455,6 +19369,9 @@
                           },
                           {
                             "$ref": "#/components/schemas/Schema11BackupDocument"
+                          },
+                          {
+                            "$ref": "#/components/schemas/Schema12BackupDocument"
                           }
                         ]
                       },
@@ -18576,7 +19493,7 @@
       "post": {
         "operationId": "previewBackupRestore",
         "summary": "校验备份并预览恢复",
-        "description": "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        "description": "dry-run 与 preview 为同一处理器。当前 schema 13，兼容已发布的 10/11/12；旧文件先验证冻结的原 schema hash、完整字段、逐表/整体 hash 及业务关联。10 补出 platforms，10/11 补空 provider_accounts；所有旧版本补齐 registration 默认值（login_methods=[\"unknown\"] 的 JSON 字符串、mailbox_link_state=auto，其余为空字符串）并计算 schema 13 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
         "tags": [
           "便携业务备份"
         ],
@@ -18667,6 +19584,9 @@
                           },
                           {
                             "$ref": "#/components/schemas/Schema11BackupDocument"
+                          },
+                          {
+                            "$ref": "#/components/schemas/Schema12BackupDocument"
                           }
                         ]
                       },
@@ -18839,7 +19759,7 @@
           "unknown_outcome": "never_automatically_reexecute",
           "expired_complete": "may_be_removed_no_deduplication_guarantee"
         },
-        "x-side-effects": "替换 12 张业务表（含 platforms）及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+        "x-side-effects": "替换 12 张业务表（含 platforms、provider_accounts 和 registration 元数据）及 settings 指定偏好，共 13 表，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
         "x-credential-response": false,
         "x-request-body-max-bytes": 2097152,
         "requestBody": {
@@ -23363,6 +24283,15 @@
           "q": {
             "type": "string",
             "maxLength": 200
+          },
+          "match": {
+            "type": "string",
+            "enum": [
+              "mailbox",
+              "platform"
+            ],
+            "default": "mailbox",
+            "description": "mailbox 查询有效收件邮箱，不能确认属于某平台且不更新平台历史验证码；platform 仅用于 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配，缺少规则返回 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。"
           }
         },
         "additionalProperties": true,
@@ -23441,6 +24370,22 @@
             ],
             "additionalProperties": true
           }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "email"
+              ]
+            },
+            "then": {
+              "properties": {
+                "match": {
+                  "const": "mailbox"
+                }
+              }
+            }
+          }
         ]
       },
       "Code": {
@@ -23480,6 +24425,16 @@
             "type": "boolean"
           },
           "message": {
+            "type": "string"
+          },
+          "match_scope": {
+            "type": "string",
+            "enum": [
+              "mailbox",
+              "platform"
+            ]
+          },
+          "match_reason": {
             "type": "string"
           }
         },
@@ -23794,6 +24749,227 @@
         ],
         "additionalProperties": true
       },
+      "RegistrationMetadataInput": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "password",
+                    "google",
+                    "microsoft",
+                    "sso",
+                    "magic_link",
+                    "passkey",
+                    "unknown"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+                "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "[\"unknown\"]",
+            "description": "接受数组或 JSON 数组字符串；省略、空字符串或空数组默认为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached",
+              ""
+            ],
+            "default": "auto",
+            "description": "省略或空字符串归一为 auto；auto 按有效收件地址与 email_source 关联；detached 保留台账和保留保护，停止该平台注册的自动查收。"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          }
+        },
+        "additionalProperties": true
+      },
+      "RegistrationMetadata": {
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+            "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached"
+            ],
+            "default": "auto"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          }
+        },
+        "additionalProperties": true
+      },
       "VaultInput": {
         "type": "object",
         "properties": {
@@ -23854,6 +25030,136 @@
           "remark": {
             "type": "string",
             "maxLength": 4000
+          },
+          "is_pinned": {
+            "type": [
+              "integer",
+              "boolean"
+            ],
+            "enum": [
+              0,
+              1,
+              false,
+              true
+            ]
+          },
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "password",
+                    "google",
+                    "microsoft",
+                    "sso",
+                    "magic_link",
+                    "passkey",
+                    "unknown"
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "maxLength": 1000,
+                "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+                "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "[\"unknown\"]",
+            "description": "接受数组或 JSON 数组字符串；省略、空字符串或空数组默认为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached",
+              ""
+            ],
+            "default": "auto",
+            "description": "省略或空字符串归一为 auto；auto 按有效收件地址与 email_source 关联；detached 保留台账和保留保护，停止该平台注册的自动查收。"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
           }
         },
         "required": [
@@ -23890,6 +25196,15 @@
               "update"
             ],
             "default": "skip"
+          },
+          "update_mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "replace"
+            ],
+            "default": "merge",
+            "description": "duplicate_mode=update 时生效；merge 仅写明确提供的字段，replace 将省略字段恢复默认值。明确提供空值可清空字段。"
           }
         },
         "additionalProperties": true,
@@ -23963,6 +25278,79 @@
                 "duplicate": {
                   "type": "boolean"
                 },
+                "provided_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "platform_name",
+                      "platform_url",
+                      "account_email",
+                      "email_source",
+                      "username",
+                      "password",
+                      "totp_secret",
+                      "status",
+                      "category",
+                      "proxy_node",
+                      "remark",
+                      "is_pinned",
+                      "workspace",
+                      "account_identifier",
+                      "login_methods",
+                      "mailbox_address",
+                      "mailbox_link_state",
+                      "verification_sender",
+                      "verification_keyword",
+                      "registered_at",
+                      "last_verified_at",
+                      "expires_at"
+                    ]
+                  }
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "update",
+                    "skip"
+                  ]
+                },
+                "changed_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "platform_name",
+                      "platform_url",
+                      "account_email",
+                      "email_source",
+                      "username",
+                      "password",
+                      "totp_secret",
+                      "status",
+                      "category",
+                      "proxy_node",
+                      "remark",
+                      "is_pinned",
+                      "workspace",
+                      "account_identifier",
+                      "login_methods",
+                      "mailbox_address",
+                      "mailbox_link_state",
+                      "verification_sender",
+                      "verification_keyword",
+                      "registered_at",
+                      "last_verified_at",
+                      "expires_at"
+                    ]
+                  }
+                },
+                "existing_id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
                 "error": {
                   "type": "string"
                 }
@@ -23970,7 +25358,25 @@
               "required": [
                 "line"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "oneOf": [
+                {
+                  "required": [
+                    "error"
+                  ]
+                },
+                {
+                  "required": [
+                    "action",
+                    "changed_fields"
+                  ],
+                  "not": {
+                    "required": [
+                      "error"
+                    ]
+                  }
+                }
+              ]
             },
             "maxItems": 200
           }
@@ -24086,17 +25492,108 @@
             "type": "string",
             "maxLength": 4000
           },
-          "id": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
           "is_pinned": {
             "type": "integer",
             "enum": [
               0,
               1
             ]
+          },
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+            "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached"
+            ],
+            "default": "auto"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
           },
           "last_code": {
             "type": "string"
@@ -24175,6 +25672,104 @@
             "type": "string",
             "maxLength": 4000
           },
+          "is_pinned": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+            "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached"
+            ],
+            "default": "auto"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
           "id": {
             "type": "integer",
             "minimum": 1,
@@ -24194,13 +25789,6 @@
               1
             ],
             "description": "仅标记是否配置 TOTP；密钥只在显式读取详情或导出时返回。"
-          },
-          "is_pinned": {
-            "type": "integer",
-            "enum": [
-              0,
-              1
-            ]
           },
           "last_code": {
             "type": "string"
@@ -24232,6 +25820,311 @@
           "needs_attention"
         ],
         "additionalProperties": true
+      },
+      "MailboxIdentity": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 264,
+            "pattern": "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+            "description": "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。"
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "cf_domain",
+              "outlook",
+              "gptmail",
+              "external",
+              "mailtm",
+              "mailgw"
+            ]
+          },
+          "account_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "health": {
+            "$ref": "#/components/schemas/Health",
+            "description": "记录的连接健康状态。已过期且无保留保护的 CF 身份为 state=disabled、can_lookup=true：新邮件将被拒收，已保存的历史邮件仍可查询。"
+          },
+          "registration_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "platform_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "affected_registrations": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "address",
+          "source",
+          "account_id",
+          "health",
+          "registration_count",
+          "platform_count",
+          "platforms",
+          "expires_at",
+          "protected",
+          "affected_registrations"
+        ],
+        "additionalProperties": false
+      },
+      "MailboxIdentitySummary": {
+        "type": "object",
+        "properties": {
+          "total_platforms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unique_addresses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_registrations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_connections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attention_connections": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "affected_registrations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "due_registrations": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "total_platforms",
+          "unique_addresses",
+          "total_registrations",
+          "total_connections",
+          "attention_connections",
+          "affected_registrations",
+          "due_registrations"
+        ],
+        "additionalProperties": false
+      },
+      "MailboxIdentityRegistration": {
+        "type": "object",
+        "properties": {
+          "platform_name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1
+          },
+          "platform_url": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "account_email": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          },
+          "email_source": {
+            "type": "string",
+            "enum": [
+              "cf_domain",
+              "outlook",
+              "gptmail",
+              "external",
+              "mailtm",
+              "mailgw"
+            ]
+          },
+          "username": {
+            "type": "string",
+            "maxLength": 254
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "pending",
+              "banned",
+              "deprecated"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "remark": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "is_pinned": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "workspace": {
+            "type": "string",
+            "maxLength": 100,
+            "default": ""
+          },
+          "account_identifier": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "login_methods": {
+            "type": "string",
+            "maxLength": 1000,
+            "pattern": "^\\s*\\[\\s*(?:\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\"(?:\\s*,\\s*\"(?:password|google|microsoft|sso|magic_link|passkey|unknown)\")*)?\\s*\\]\\s*$",
+            "description": "响应为 JSON 数组编码的字符串，例如 [\"google\",\"password\"]；去重并排序，空数组归一为 [\"unknown\"]。"
+          },
+          "mailbox_address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              {
+                "type": "string",
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。"
+          },
+          "mailbox_link_state": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "detached"
+            ],
+            "default": "auto"
+          },
+          "verification_sender": {
+            "type": "string",
+            "maxLength": 254,
+            "default": ""
+          },
+          "verification_keyword": {
+            "type": "string",
+            "maxLength": 200,
+            "default": ""
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "last_verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": ""
+              },
+              {
+                "type": "string",
+                "maxLength": 40,
+                "format": "date-time"
+              }
+            ],
+            "description": "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。"
+          },
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "last_code": {
+            "type": "string"
+          },
+          "last_code_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          },
+          "mailbox": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "needs_attention": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "UTC 时间，可能为 ISO 8601 或 SQLite UTC（YYYY-MM-DD HH:mm:ss）；未发生时为空字符串。"
+          }
+        },
+        "required": [
+          "id",
+          "platform_name",
+          "account_email",
+          "email_source",
+          "mailbox",
+          "needs_attention"
+        ],
+        "additionalProperties": false
       },
       "VaultPatch": {
         "type": "object",
@@ -26487,7 +28380,7 @@
           },
           "schema_version": {
             "type": "integer",
-            "const": 12
+            "const": 13
           },
           "schema_hash": {
             "type": "string",
@@ -26721,6 +28614,464 @@
         "properties": {
           "manifest": {
             "$ref": "#/components/schemas/BackupManifest"
+          },
+          "tables": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "groups": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "accounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "account_tags": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "cf_inbox_mails": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "mail_rules": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "platforms": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "platform_vault": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "temp_emails": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "temp_mailboxes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "domains": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              },
+              "provider_accounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "maxItems": 1000
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "manifest",
+          "tables"
+        ],
+        "additionalProperties": false
+      },
+      "Schema12BackupManifest": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "mailhub-backup"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "schema_version": {
+            "type": "integer",
+            "const": 12
+          },
+          "schema_hash": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "created_at": {
+            "type": "string",
+            "maxLength": 40,
+            "format": "date-time"
+          },
+          "redacted": {
+            "type": "boolean"
+          },
+          "restorable": {
+            "type": "boolean"
+          },
+          "consistency": {
+            "type": "string",
+            "const": "revision_checked"
+          },
+          "table_counts": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "groups": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "tags": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "accounts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "account_tags": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "cf_inbox_mails": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "mail_rules": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "platforms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "platform_vault": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "temp_emails": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "temp_mailboxes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "domains": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              },
+              "provider_accounts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          },
+          "table_hashes": {
+            "type": "object",
+            "properties": {
+              "settings": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "groups": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "tags": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "accounts": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "account_tags": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "cf_inbox_mails": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "mail_rules": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "platforms": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "platform_vault": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "temp_emails": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "temp_mailboxes": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "domains": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              },
+              "provider_accounts": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "settings",
+              "groups",
+              "tags",
+              "accounts",
+              "account_tags",
+              "cf_inbox_mails",
+              "mail_rules",
+              "platforms",
+              "platform_vault",
+              "temp_emails",
+              "temp_mailboxes",
+              "domains",
+              "provider_accounts"
+            ],
+            "additionalProperties": false
+          },
+          "data_hash": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "external_dependencies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "format",
+          "version",
+          "schema_version",
+          "schema_hash",
+          "created_at",
+          "redacted",
+          "restorable",
+          "consistency",
+          "table_counts",
+          "table_hashes",
+          "data_hash",
+          "excluded",
+          "external_dependencies"
+        ],
+        "additionalProperties": false
+      },
+      "Schema12BackupDocument": {
+        "type": "object",
+        "properties": {
+          "manifest": {
+            "$ref": "#/components/schemas/Schema12BackupManifest"
           },
           "tables": {
             "type": "object",
@@ -27766,7 +30117,7 @@
           "tables"
         ],
         "additionalProperties": false,
-        "description": "兼容已发布的 schema 10 和 11：先严格校验原始 schema hash、字段及内容，schema 10 在内存中补出 platforms，旧版本均补出空 provider_accounts 并转为 schema 12。明文仅限脱敏预览。"
+        "description": "兼容已发布的 schema 10/11/12：先严格校验各版本冻结的 schema hash、字段及内容。10 补出 platforms，10/11 补空 provider_accounts，所有旧版本补 registration 默认字段并转为 schema 13。明文仅限脱敏预览。"
       },
       "EncryptedBackup": {
         "type": "object",
@@ -27842,7 +30193,7 @@
           },
           "schema_version": {
             "type": "integer",
-            "const": 12
+            "const": 13
           },
           "name": {
             "type": "string",

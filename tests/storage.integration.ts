@@ -15,6 +15,7 @@ import { Coordinator, type Source } from "../src/storage/coordinator";
 import { MemoryControl } from "./storage-support";
 import { app } from "../src/index";
 import { database, ACCOUNT } from "./helpers";
+import { registrationDefaults } from "../shared/registrations";
 import {
   digest,
   and,
@@ -29,6 +30,7 @@ import {
   defaults,
   tables,
   rowKey,
+  StorageError,
   type DataPort,
   type Row,
 } from "../src/storage/model";
@@ -61,6 +63,177 @@ const configs: SourceConfig[] = [
   },
 ];
 const token = "local-integration-connector-token-32-characters";
+test(
+  "real adapters bind shared CF aliases and retain auto and detached registrations despite stale protection",
+  { timeout: 60000 },
+  async (t) => {
+    for (const config of configs) {
+      await t.test(config.id, async (t) => {
+        const source = await connectSource(config);
+        try {
+          for (const linkState of ["auto", "detached"] as const) {
+            await t.test(linkState, async () => {
+              const workspace = crypto.randomUUID();
+              const port = source.port(crypto.randomUUID(), workspace);
+              await port.initialize({ version: 0, hash: "", counters: {} });
+              const store = new DirectStore(port);
+              const alias = `delivery-${workspace}@example.test`;
+              const login = `login-${workspace}@example.test`;
+              const external = `external-${workspace}@example.test`;
+              const fallback = `fallback-${workspace}@example.test`;
+              const addresses = [alias, login, external, fallback];
+              await store.mutate([
+                {
+                  op: "insert",
+                  table: "temp_mailboxes",
+                  rows: addresses.map((address) => ({
+                    address,
+                    expires_at: "2099-01-01T00:00:00.000Z",
+                  })),
+                },
+                {
+                  op: "insert",
+                  table: "cf_inbox_mails",
+                  rows: addresses.map((recipient) => ({
+                    recipient,
+                    raw_object_key: `mail/${workspace}/${recipient}.eml`,
+                  })),
+                },
+                {
+                  op: "insert",
+                  table: "platform_vault",
+                  rows: [
+                    {
+                      platform_name: "External decoy",
+                      account_email: login,
+                      email_source: "external",
+                      mailbox_address: alias.toUpperCase(),
+                      workspace,
+                    },
+                    {
+                      platform_name: "First CF alias",
+                      account_email: login,
+                      email_source: "cf_domain",
+                      mailbox_address: alias.toUpperCase(),
+                      mailbox_link_state: linkState,
+                      workspace,
+                    },
+                    {
+                      platform_name: "Selected CF alias",
+                      account_email: login,
+                      email_source: "cf_domain",
+                      mailbox_address: alias.toUpperCase(),
+                      mailbox_link_state: linkState,
+                      workspace,
+                    },
+                    {
+                      platform_name: "Default delivery address",
+                      account_email: fallback.toUpperCase(),
+                      email_source: "cf_domain",
+                      workspace,
+                    },
+                    {
+                      platform_name: "External mailbox only",
+                      account_email: external,
+                      email_source: "external",
+                      workspace,
+                    },
+                  ],
+                },
+                update("temp_mailboxes", eq("address", alias), {
+                  associated_vault_id: 3,
+                }),
+                ...addresses.map((address) => ({
+                  op: "bindMailbox" as const,
+                  address,
+                })),
+              ]);
+              const selected = await store.first(
+                "temp_mailboxes",
+                eq("address", alias),
+              );
+              assert.equal(selected?.associated_vault_id, 3);
+              assert.equal(selected?.associated_platform, "Selected CF alias");
+              assert.equal(selected?.is_permanent, 1);
+              assert.equal(selected?.expires_at, "");
+              assert.equal(
+                (await store.first("temp_mailboxes", eq("address", fallback)))
+                  ?.associated_vault_id,
+                4,
+              );
+              for (const address of addresses) {
+                const protectedAddress =
+                  address === alias || address === fallback;
+                assert.equal(
+                  (
+                    await store.first(
+                      "cf_inbox_mails",
+                      eq("recipient", address),
+                    )
+                  )?.is_protected,
+                  protectedAddress ? 1 : 0,
+                  address,
+                );
+                if (!protectedAddress) {
+                  const box = await store.first(
+                    "temp_mailboxes",
+                    eq("address", address),
+                  );
+                  assert.equal(box?.associated_vault_id, null, address);
+                  assert.equal(box?.is_permanent, 0, address);
+                }
+              }
+              await store.mutate([
+                remove("platform_vault", eq("id", 3)),
+                { op: "bindMailbox", address: alias },
+              ]);
+              assert.equal(
+                (await store.first("temp_mailboxes", eq("address", alias)))
+                  ?.associated_vault_id,
+                2,
+              );
+              // Retention must recheck registrations instead of trusting either
+              // cached mailbox permanence or a message's protection flag.
+              await store.mutate([
+                update("temp_mailboxes", oneOf("address", [alias, fallback]), {
+                  is_permanent: 0,
+                }),
+                update("cf_inbox_mails", oneOf("recipient", addresses), {
+                  is_protected: 0,
+                }),
+              ]);
+              const mails = await store.select("cf_inbox_mails");
+              const [cleaned] = await store.mutate([
+                { op: "cleanMail", ids: mails.map((mail) => Number(mail.id)) },
+              ]);
+              assert.equal(cleaned.changes, 2);
+              assert.deepEqual(
+                (
+                  await store.select("cf_inbox_mails", {
+                    order: [["id", "asc"]],
+                  })
+                ).map((mail) => mail.recipient),
+                [alias, fallback],
+              );
+              assert.deepEqual(
+                (
+                  await store.select("mail_object_gc", {
+                    order: [["key", "asc"]],
+                  })
+                ).map((row) => row.key),
+                [external, login]
+                  .map((address) => `mail/${workspace}/${address}.eml`)
+                  .sort(),
+              );
+            });
+          }
+        } finally {
+          await source.close();
+        }
+      });
+    }
+  },
+);
 test(
   "independent platforms rename, merge and preserve account credentials on every remote database",
   { timeout: 60000 },
@@ -382,6 +555,303 @@ test(
           const rows = await all(port);
           assert.equal(rows.accounts[0].refresh_token, ACCOUNT.refresh_token);
         });
+      for (const config of configs) {
+        await t.test(
+          `legacy registration defaults, import merge and D1 round trips: ${config.id}`,
+          async () => {
+            const fixture = await database();
+            try {
+              const workspace = crypto.randomUUID();
+              const port = new HttpPort(
+                { endpoint, source: config.id, token },
+                crypto.randomUUID(),
+                workspace,
+              );
+              await port.initialize({ version: 0, hash: "", counters: {} });
+              const store = new DirectStore(port);
+              const legacy: Row = {
+                ...defaults("platform_vault"),
+                id: 1,
+                platform_name: "Legacy registration",
+                account_email: `legacy-${workspace}@example.test`,
+                password: "legacy-private-password",
+                totp_secret: "LEGACYPRIVATE2FA",
+              };
+              for (const field of Object.keys(registrationDefaults))
+                delete legacy[field];
+              await port.copy("platform_vault", [legacy]);
+              const oldRevision = await port.info();
+              const expectedDefaults = {
+                workspace: "",
+                account_identifier: "",
+                login_methods: '["unknown"]',
+                mailbox_address: "",
+                mailbox_link_state: "auto",
+                verification_sender: "",
+                verification_keyword: "",
+                registered_at: "",
+                last_verified_at: "",
+                expires_at: "",
+              };
+              assert.deepEqual(
+                await store.first("platform_vault", eq("id", 1)),
+                {
+                  ...legacy,
+                  ...expectedDefaults,
+                },
+              );
+              assert.deepEqual(await port.info(), oldRevision);
+              assert.deepEqual((await port.page("platform_vault")).rows, [
+                legacy,
+              ]);
+              // Only the Durable Object transport is local; app routes use the
+              // actual HTTP connector and database for reads and atomic writes.
+              fixture.env.STORAGE = {
+                idFromName: () => workspace,
+                get: () => ({
+                  fetch: async (input: string, init: RequestInit) => {
+                    const body = JSON.parse(String(init.body));
+                    try {
+                      let data: unknown;
+                      switch (new URL(input).pathname) {
+                        case "/data/find":
+                          data = await store.select(body.table, body.query);
+                          break;
+                        case "/data/count":
+                          data = await store.count(body.table, body.where);
+                          break;
+                        case "/data/mutate":
+                          data = await store.mutate(body.mutations);
+                          break;
+                        case "/auth/settings":
+                          data = {};
+                          break;
+                        default:
+                          throw new Error(`Unexpected storage path: ${input}`);
+                      }
+                      return Response.json({ data });
+                    } catch (error) {
+                      if (!(error instanceof StorageError)) throw error;
+                      return Response.json(
+                        { error: error.code, message: error.message },
+                        { status: error.status },
+                      );
+                    }
+                  },
+                }),
+              } as unknown as DurableObjectNamespace;
+              const metadata = {
+                workspace,
+                account_identifier: `member-${workspace}-中文`,
+                login_methods: '["google","microsoft","password"]',
+                mailbox_address: `delivery-${workspace}@example.test`,
+                mailbox_link_state: "detached",
+                verification_sender: "auth+platform@example.test",
+                verification_keyword: '验证码 _100% "中文"',
+                registered_at: "2020-01-01T00:00:00.000Z",
+                last_verified_at: "2026-01-02T03:04:05.000Z",
+                expires_at: "2030-12-31T23:59:59.000Z",
+              };
+              const account = {
+                ...metadata,
+                platform_name: "Shared registration",
+                account_email: `shared-${workspace}@example.test`,
+                email_source: "cf_domain",
+                password: "preserved-private-password",
+                totp_secret: "PRESERVEDPRIVATE2FA",
+                remark: "before merge",
+                is_pinned: 1,
+              };
+              const created = await fixture.request("/api/vault", {
+                ...account,
+                login_methods: ["password", "google", "microsoft", "password"],
+                registered_at: "2020-01-01T08:00:00+08:00",
+              });
+              assert.equal(
+                created.response.status,
+                200,
+                JSON.stringify(created.data),
+              );
+              const id = created.data.data.id;
+              assert.equal(id, 2);
+              const before = await store.first("platform_vault", eq("id", id));
+              assert.ok(before);
+              for (const [field, value] of Object.entries(metadata))
+                assert.equal(before[field], value, field);
+
+              const patch = {
+                platform_name: account.platform_name,
+                account_email: account.account_email,
+                email_source: account.email_source,
+                workspace,
+                account_identifier: account.account_identifier,
+                login_methods: ["password", "microsoft", "google"],
+                remark: "after merge",
+                verification_keyword: '合并验证 _100% "中文"',
+                last_verified_at: "2026-11-17T16:00:00+08:00",
+              };
+              const raw_text = JSON.stringify([patch]);
+              const preview = await fixture.request(
+                "/api/vault/import-preview",
+                {
+                  raw_text,
+                  duplicate_mode: "update",
+                },
+              );
+              assert.equal(
+                preview.response.status,
+                200,
+                JSON.stringify(preview.data),
+              );
+              assert.equal(preview.data.rows[0].action, "update");
+              assert.equal(preview.data.rows[0].existing_id, id);
+              assert.deepEqual(preview.data.rows[0].changed_fields, [
+                "remark",
+                "verification_keyword",
+                "last_verified_at",
+              ]);
+              assert.ok(
+                !JSON.stringify(preview.data).includes(account.password),
+              );
+              assert.ok(
+                !JSON.stringify(preview.data).includes(account.totp_secret),
+              );
+              const imported = await fixture.request("/api/vault/import", {
+                raw_text,
+                duplicate_mode: "update",
+              });
+              assert.equal(
+                imported.response.status,
+                200,
+                JSON.stringify(imported.data),
+              );
+              assert.equal(imported.data.updated, 1);
+              assert.equal(imported.data.created, 0);
+              const merged = await store.first("platform_vault", eq("id", id));
+              assert.deepEqual(merged, {
+                ...before,
+                remark: patch.remark,
+                verification_keyword: patch.verification_keyword,
+                last_verified_at: "2026-11-17T08:00:00.000Z",
+                updated_at: merged?.updated_at,
+              });
+
+              const variants = [
+                { ...account, platform_name: "Another registration" },
+                { ...account, workspace: `${workspace}-team` },
+                {
+                  ...account,
+                  account_identifier: `${workspace}-another-member`,
+                },
+                { ...account, login_methods: '["password"]' },
+              ];
+              const distinct = await fixture.request("/api/vault/import", {
+                accounts: variants,
+              });
+              assert.equal(
+                distinct.response.status,
+                200,
+                JSON.stringify(distinct.data),
+              );
+              assert.equal(distinct.data.created, variants.length);
+              assert.equal(distinct.data.updated, 0);
+              assert.equal(await store.count("platform_vault"), 6);
+              assert.equal(
+                await store.count(
+                  "platform_vault",
+                  eq("account_email", account.account_email),
+                ),
+                5,
+              );
+              for (const [field, value] of Object.entries(expectedDefaults)) {
+                const where = eq(field, value);
+                assert.equal(
+                  await store.count("platform_vault", where),
+                  1,
+                  field,
+                );
+                assert.deepEqual(
+                  await store.select("platform_vault", {
+                    where,
+                    columns: ["id", field],
+                  }),
+                  [{ id: 1, [field]: value }],
+                  field,
+                );
+              }
+              const defaultIdentity = and(
+                eq("workspace", ""),
+                oneOf("login_methods", ['["unknown"]']),
+                ne("mailbox_link_state", "detached"),
+              );
+              assert.equal(
+                await store.count("platform_vault", defaultIdentity),
+                1,
+              );
+              const expectedRows = await store.select("platform_vault", {
+                order: [["id", "asc"]],
+              });
+              const d1 = new D1Port(fixture.DB, crypto.randomUUID());
+              const restored = new HttpPort(
+                { endpoint, source: config.id, token },
+                crypto.randomUUID(),
+                crypto.randomUUID(),
+              );
+              await d1.initialize(await port.info());
+              await restored.initialize(await port.info());
+              for (const table of [
+                "platform_vault",
+                "platforms",
+                "temp_mailboxes",
+              ] as const) {
+                const raw = (await port.page(table)).rows;
+                await d1.copy(table, raw);
+                assert.deepEqual((await d1.page(table)).rows, raw, table);
+                await restored.copy(table, (await d1.page(table)).rows);
+                assert.deepEqual((await restored.page(table)).rows, raw, table);
+              }
+              for (const copied of [port, d1, restored]) {
+                const copy = new DirectStore(copied);
+                assert.deepEqual(
+                  await copy.select("platform_vault", {
+                    order: [["id", "asc"]],
+                  }),
+                  expectedRows,
+                );
+                assert.equal(
+                  await copy.count("platform_vault", defaultIdentity),
+                  1,
+                );
+                assert.equal(
+                  await copy.count("platform_vault", {
+                    field: "registered_at",
+                    op: "dateLt",
+                    value: "2020-01-02T00:00:00Z",
+                  }),
+                  5,
+                );
+                assert.equal(
+                  await copy.count("platform_vault", {
+                    field: "expires_at",
+                    op: "dateGte",
+                    value: metadata.expires_at,
+                  }),
+                  5,
+                );
+                assert.deepEqual(
+                  (await copied.page("platform_vault")).rows.find(
+                    (row) => row.id === 1,
+                  ),
+                  legacy,
+                );
+                assert.deepEqual(await copied.info(), await port.info());
+              }
+            } finally {
+              await fixture.dispose();
+            }
+          },
+        );
+      }
       await t.test(
         "D1 → MySQL → MongoDB → Redis server A → Redis server B → D1 with concurrent changes",
         async () => {
@@ -432,6 +902,18 @@ test(
               ],
               "fictional-migration-encryption-key-32-characters",
             );
+            const registrationMetadata = {
+              workspace: crypto.randomUUID(),
+              account_identifier: "migration-member-中文",
+              login_methods: '["google","password"]',
+              mailbox_address: `migration-${crypto.randomUUID()}@example.test`,
+              mailbox_link_state: "detached",
+              verification_sender: "migration-auth@example.test",
+              verification_keyword: '验证码 _100% "中文"',
+              registered_at: "2020-01-01T00:00:00.000Z",
+              last_verified_at: "2026-01-01T00:00:00.000Z",
+              expires_at: "2030-01-01T00:00:00.000Z",
+            };
             await coordinator.mutate([
               insert("provider_accounts", providerRows[0]),
               insert("accounts", { ...ACCOUNT }),
@@ -456,6 +938,7 @@ test(
                   account_email: `p${i}@example.test`,
                   password: `password-${i}`,
                   totp_secret: '中文 " <script>',
+                  ...(i === 1 ? registrationMetadata : {}),
                 })),
               },
             ]);
@@ -475,6 +958,10 @@ test(
                   refresh_token: `rotated-${target}`,
                 }),
                 remove("platform_vault", eq("id", 1)),
+                update("platform_vault", eq("id", 2), {
+                  verification_keyword: `verification-${target}`,
+                  last_verified_at: "2026-11-17T08:00:00.000Z",
+                }),
                 update("settings", eq("key", "session_secret"), {
                   value: `session-${target}`,
                 }),
@@ -499,6 +986,19 @@ test(
               assert.equal(provider.password, providerRows[0].password);
               assert.equal(provider.token, providerRows[0].token);
               assert.match(String(provider.password), /^enc:v1:/);
+              const registration = (
+                await coordinator.find("platform_vault", {
+                  where: eq("id", 2),
+                })
+              )[0];
+              for (const [field, value] of Object.entries({
+                ...registrationMetadata,
+                verification_keyword: `verification-${target}`,
+                last_verified_at: "2026-11-17T08:00:00.000Z",
+                password: "password-1",
+                totp_secret: '中文 " <script>',
+              }))
+                assert.equal(registration[field], value, `${target}: ${field}`);
 
               const state = await memory.get<any>("state"),
                 source = await factory(

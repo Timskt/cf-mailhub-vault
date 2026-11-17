@@ -27,6 +27,7 @@ import {
   search,
   update,
 } from "../storage/client";
+import { mailboxReferenceFilter } from "../registration";
 import type { Env } from "../types";
 import {
   choice,
@@ -338,7 +339,7 @@ app.delete("/accounts/:id", async (c) => {
       op: "assertAbsent",
       table: "platform_vault",
       where: and(
-        { field: "account_email", op: "ieq", value: account.address },
+        mailboxReferenceFilter(account.address),
         eq("email_source", account.provider),
       ),
       message: "此邮箱仍绑定平台账号，请先调整平台绑定",

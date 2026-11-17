@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { lookupCode } from "../codes";
 import { allocateMailbox, normalizeDomain } from "../domains";
 import { createMailboxBatch, previewMailboxes } from "../mailbox-batches";
+import { mailboxReferenceFilter } from "../registration";
 import {
   and,
   collect,
@@ -215,12 +216,35 @@ app.post("/:id/toggle-permanent", async (c) => {
   if (!row) return c.json({ success: false, message: "邮箱不存在" }, 404);
   const bound = await db(c.env).first(
     "platform_vault",
-    and(eq("account_email", row.address), eq("email_source", "cf_domain")),
+    and(mailboxReferenceFilter(row.address), eq("email_source", "cf_domain")),
   );
   if (row.is_permanent && bound)
     invalid("此邮箱绑定了平台账号，需永久保留；请先调整平台绑定");
   const permanent = row.is_permanent ? 0 : 1;
   await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "temp_mailboxes",
+      where: and(
+        eq("id", id),
+        eq("address", row.address),
+        eq("is_permanent", row.is_permanent),
+      ),
+      message: "邮箱状态已变化，请刷新后重试",
+    },
+    ...(!permanent
+      ? [
+          {
+            op: "assertAbsent" as const,
+            table: "platform_vault" as const,
+            where: and(
+              mailboxReferenceFilter(row.address),
+              eq("email_source", "cf_domain"),
+            ),
+            message: "此邮箱绑定了平台账号，需永久保留；请先调整平台绑定",
+          },
+        ]
+      : []),
     update("temp_mailboxes", eq("id", id), {
       is_permanent: permanent,
       expires_at: permanent ? "" : new Date(Date.now() + 3600000).toISOString(),
@@ -251,12 +275,29 @@ app.post("/:id/link-vault", async (c) => {
     "platform_vault",
     and(
       eq("id", vault),
-      eq("account_email", row?.address || ""),
+      mailboxReferenceFilter(row?.address || ""),
       eq("email_source", "cf_domain"),
     ),
   );
   if (!row || !account) invalid("邮箱与平台记录不匹配，请先在台账中绑定该邮箱");
   await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "temp_mailboxes",
+      where: and(eq("id", id), eq("address", row.address)),
+      message: "邮箱已变化，请刷新后重试",
+    },
+    {
+      op: "assertExists",
+      table: "platform_vault",
+      where: and(
+        eq("id", vault),
+        mailboxReferenceFilter(row.address),
+        eq("email_source", "cf_domain"),
+        eq("platform_name", account.platform_name),
+      ),
+      message: "邮箱与平台记录已变化，请刷新后重新关联",
+    },
     update("temp_mailboxes", eq("id", id), {
       associated_vault_id: vault,
       associated_platform: account.platform_name,
@@ -278,12 +319,27 @@ app.delete("/:id", async (c) => {
   if (
     await db(c.env).first(
       "platform_vault",
-      and(eq("account_email", row.address), eq("email_source", "cf_domain")),
+      and(mailboxReferenceFilter(row.address), eq("email_source", "cf_domain")),
     )
   )
     invalid("该邮箱仍绑定平台账号，请先调整平台绑定");
   // Keep an expired tombstone: catch-all must not silently revive a destroyed address.
   await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "temp_mailboxes",
+      where: and(eq("id", id), eq("address", row.address)),
+      message: "邮箱已变化，请刷新后重试",
+    },
+    {
+      op: "assertAbsent",
+      table: "platform_vault",
+      where: and(
+        mailboxReferenceFilter(row.address),
+        eq("email_source", "cf_domain"),
+      ),
+      message: "该邮箱仍绑定平台账号，请先调整平台绑定",
+    },
     update("temp_mailboxes", eq("id", id), {
       is_permanent: 0,
       expires_at: "1970-01-01T00:00:00.000Z",

@@ -342,7 +342,12 @@ export default function OutlookPage({
     {
       label: "查看关联平台",
       icon: <Link />,
-      action: () => w.navigate("vault", a.email),
+      action: () => w.identity({ address: a.email, source: "outlook" }),
+    },
+    {
+      label: "查看全部登记",
+      icon: <Link />,
+      action: () => w.identity({ address: a.email, source: "outlook" }),
     },
     {
       label: "导出账号 / 复制配置",
@@ -683,6 +688,15 @@ export default function OutlookPage({
                         <div className="row-detail">
                           {a.remark || `关联 ${a.platform_count} 个平台账号`}
                         </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            w.identity({ address: a.email, source: "outlook" })
+                          }
+                        >
+                          查看全部登记
+                        </Button>
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1.5">
@@ -777,6 +791,15 @@ export default function OutlookPage({
                       `关联 ${a.platform_count} 个平台账号`}
                   </p>
                   <RenewalStatus account={a} />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      w.identity({ address: a.email, source: "outlook" })
+                    }
+                  >
+                    查看全部登记
+                  </Button>
                   {needsRecovery(a) && (
                     <Button
                       variant="outline"

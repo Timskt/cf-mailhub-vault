@@ -1,12 +1,20 @@
 import { Hono } from "hono";
 import {
+  mergeVaultImport,
   parseVaultImport,
+  providedVaultFields,
   validateVaultAccount,
+  vaultColumns,
   vaultIdentity,
   vaultSources,
   vaultStatuses,
+  type VaultImportAccount,
+  type VaultImportField,
+  type VaultImportMode,
 } from "../vault-import";
-import { lookupCode, updateVaultCode } from "../codes";
+import { authorizeVaultAccount, type AuthContext } from "../api-keys";
+import { lookupVaultCode } from "../codes";
+import { deliveryAddress, mailboxReferenceFilter } from "../registration";
 import { prepareMailbox, normalizeDomain } from "../domains";
 import { platformCatalog, platformKey } from "../platforms";
 import { outlookFailure } from "../outlook";
@@ -29,7 +37,9 @@ import {
   remove,
   search,
   update,
+  StorageError,
   type Filter,
+  type Mutation,
   type Row,
 } from "../storage/client";
 import type { Env, PlatformAccount } from "../types";
@@ -37,7 +47,6 @@ import {
   boolean,
   choice,
   email,
-  httpUrl,
   integer,
   invalid,
   object,
@@ -49,55 +58,23 @@ const sources = vaultSources;
 const statuses = vaultStatuses;
 const validated = validateVaultAccount;
 export async function protectMailbox(env: Env, address: string) {
-  const store = db(env);
-  const account = await store.first<{ id: number; platform_name: string }>(
-    "platform_vault",
-    and(eq("account_email", address), eq("email_source", "cf_domain")),
-    { order: [["id", "asc"]] },
-  );
-  if (account) {
-    const [prefix, domain] = address.split("@");
-    await store.mutate([
-      insert(
-        "temp_mailboxes",
-        {
-          address,
-          prefix,
-          domain,
-          is_permanent: 1,
-          expires_at: "",
-          associated_platform: account.platform_name,
-          associated_vault_id: account.id,
-          updated_at: now(),
-        },
-        { conflict: "update" },
-      ),
-      update("cf_inbox_mails", eq("recipient", address), { is_protected: 1 }),
-    ]);
-  } else {
-    const mailbox = await store.first(
+  await db(env).mutate(mailboxBinding(address));
+}
+function mailboxBinding(address: string): Mutation[] {
+  const [prefix, domain] = address.split("@");
+  return [
+    insert(
       "temp_mailboxes",
-      and(eq("address", address), eq("is_permanent", 1)),
-    );
-    await store.mutate([
-      update("temp_mailboxes", eq("address", address), {
-        associated_platform: "",
-        associated_vault_id: null,
-      }),
-      update("cf_inbox_mails", eq("recipient", address), {
-        is_protected: mailbox ? 1 : 0,
-      }),
-    ]);
-  }
+      { address, prefix, domain },
+      { conflict: "ignore" },
+    ),
+    { op: "bindMailbox", address },
+  ];
 }
 function vaultWhere(params: Record<string, string>) {
   const filters: Filter[] = [];
   if (params.mailbox)
-    filters.push({
-      field: "account_email",
-      op: "ieq",
-      value: email(params.mailbox),
-    });
+    filters.push(mailboxReferenceFilter(email(params.mailbox)));
   for (const field of ["category", "status", "platform"] as const) {
     const value = text(params[field], field, 100).trim();
     if (value)
@@ -217,19 +194,169 @@ app.get("/export", async (c) => {
     { "Content-Disposition": 'attachment; filename="platform-vault.json"' },
   );
 });
+const importIdentityColumns = [
+  "platform_name",
+  "account_email",
+  "username",
+  "email_source",
+  "workspace",
+  "account_identifier",
+  "login_methods",
+] as const;
+const importColumns = [...vaultColumns, "is_pinned"] as const;
+function importIdentityFilter(
+  account: VaultImportAccount | PlatformAccount,
+): Filter {
+  return and(
+    ...importIdentityColumns.map((field) => ({
+      field,
+      op:
+        field === "platform_name" || field === "account_email"
+          ? ("ieq" as const)
+          : ("eq" as const),
+      value: account[field] ?? (field === "login_methods" ? '["unknown"]' : ""),
+    })),
+  );
+}
+function importModes(body: Record<string, unknown>) {
+  return {
+    duplicate: choice(
+      body.duplicate_mode,
+      "已有账号",
+      ["skip", "update"] as const,
+      "skip",
+    ),
+    update: choice(
+      body.update_mode,
+      "导入更新方式",
+      ["merge", "replace"] as const,
+      "merge",
+    ),
+  };
+}
+function vaultSnapshot(row: PlatformAccount): Filter {
+  return and(
+    eq("id", row.id),
+    eq("updated_at", row.updated_at),
+    importIdentityFilter(row),
+    eq("mailbox_address", row.mailbox_address || ""),
+  );
+}
+async function planVaultImport(
+  env: Env,
+  entries: VaultImportAccount[],
+  fields: readonly VaultImportField[][],
+  modes: { duplicate: "skip" | "update"; update: VaultImportMode },
+  auth?: AuthContext,
+) {
+  if (!entries.length) return [];
+  const store = db(env);
+  const existing = await collect<PlatformAccount>(store, "platform_vault", {
+    columns: ["id", ...importIdentityColumns, "updated_at"],
+    order: [["id", "asc"]],
+  });
+  const byIdentity = new Map<string, PlatformAccount[]>();
+  for (const row of existing) {
+    const key = vaultIdentity(row);
+    byIdentity.set(key, [...(byIdentity.get(key) || []), row]);
+  }
+  const matches = entries.map(
+    (account) => byIdentity.get(vaultIdentity(account)) || [],
+  );
+  if (matches.some((rows) => rows.length > 1))
+    throw new StorageError(
+      "IMPORT_TARGET_AMBIGUOUS",
+      "存在多个相同身份的已有登记，请先在账号列表中按 ID 整理重复记录",
+      409,
+    );
+  const ids = matches.flat().map((row) => row.id);
+  const details = new Map<number, PlatformAccount>();
+  for (let offset = 0; offset < ids.length; offset += 80) {
+    for (const row of await store.select<PlatformAccount>("platform_vault", {
+      where: oneOf("id", ids.slice(offset, offset + 80)),
+      limit: 80,
+    }))
+      details.set(row.id, row);
+  }
+  const plans = [];
+  for (const [index, incoming] of entries.entries()) {
+    const snapshot = matches[index][0];
+    const prior = snapshot ? details.get(snapshot.id) : undefined;
+    if (
+      snapshot &&
+      (!prior || vaultIdentity(prior) !== vaultIdentity(incoming))
+    )
+      throw new StorageError(
+        "IMPORT_TARGET_CHANGED",
+        "已有登记发生变化，请重新预览",
+        409,
+      );
+    // Even a merge with an omitted alias must authorize the persisted mailbox.
+    if (prior) await authorizeVaultAccount(env, auth, prior);
+    const account = mergeVaultImport(
+      prior as Partial<VaultImportAccount> | undefined,
+      incoming,
+      fields[index],
+      modes.update,
+    );
+    await authorizeVaultAccount(env, auth, account);
+    const action = prior
+      ? modes.duplicate === "skip"
+        ? "skip"
+        : "update"
+      : "create";
+    const changed_fields =
+      action === "skip"
+        ? []
+        : importColumns.filter((field) => prior?.[field] !== account[field]);
+    plans.push({
+      account,
+      prior,
+      action,
+      changed_fields,
+      fields: fields[index],
+    });
+  }
+  return plans;
+}
 app.post("/import-preview", async (c) => {
   const body = object(await c.req.json());
-  const { accounts, ...preview } = parseVaultImport(
+  const parsed = parseVaultImport(
     body.raw_text,
     text(body.platform_name, "默认平台", 100),
   );
-  return c.json({ success: true, ...preview });
+  const plans = await planVaultImport(
+    c.env,
+    parsed.accounts,
+    parsed.provided_fields || [],
+    importModes(body),
+    c.get("auth"),
+  );
+  const byLine = new Map(
+    parsed.account_lines.map((line, index) => [line, plans[index]]),
+  );
+  return c.json({
+    success: true,
+    valid_count: parsed.valid_count,
+    error_count: parsed.error_count,
+    duplicate_count: parsed.duplicate_count,
+    rows: parsed.rows.map((row) => {
+      if (row.error) return row;
+      const plan = byLine.get(row.line);
+      return {
+        ...row,
+        action: plan?.action || "skip",
+        changed_fields: plan?.changed_fields || [],
+        ...(plan?.prior ? { existing_id: plan.prior.id } : {}),
+      };
+    }),
+  });
 });
 app.post("/import", async (c) => {
   const body = object(await c.req.json());
   if (body.accounts !== undefined && body.raw_text !== undefined)
     invalid("accounts 与 raw_text 请只提供一种");
-  let entries: ReturnType<typeof validated>[];
+  let entries: VaultImportAccount[], fields: VaultImportField[][];
   let duplicateCount = 0;
   if (body.raw_text !== undefined) {
     const parsed = parseVaultImport(
@@ -241,6 +368,7 @@ app.post("/import", async (c) => {
         `有 ${parsed.error_count} 行格式错误，请先修正后重新预览；本次未写入任何账号`,
       );
     entries = parsed.accounts;
+    fields = parsed.provided_fields || [];
     duplicateCount = parsed.duplicate_count;
   } else {
     if (
@@ -249,47 +377,40 @@ app.post("/import", async (c) => {
       body.accounts.length > 200
     )
       invalid("每批请提供 1–200 条平台账号记录");
-    const all = body.accounts.map(validated);
-    entries = [
-      ...new Map(
-        all.map((account) => [vaultIdentity(account), account]),
-      ).values(),
-    ];
-    duplicateCount = all.length - entries.length;
+    const unique = new Map<
+      string,
+      { account: VaultImportAccount; fields: VaultImportField[] }
+    >();
+    for (const input of body.accounts) {
+      const raw = object(input),
+        account = validated(raw);
+      unique.set(vaultIdentity(account), {
+        account,
+        fields: providedVaultFields(raw),
+      });
+    }
+    entries = [...unique.values()].map((row) => row.account);
+    fields = [...unique.values()].map((row) => row.fields);
+    duplicateCount = body.accounts.length - entries.length;
   }
   if (!entries.length) invalid("没有可导入的账号");
-  const mode = choice(
-    body.duplicate_mode,
-    "已有账号",
-    ["skip", "update"] as const,
-    "skip",
+  const modes = importModes(body);
+  const plans = await planVaultImport(
+    c.env,
+    entries,
+    fields,
+    modes,
+    c.get("auth"),
   );
-  const existing = await collect(db(c.env), "platform_vault", {
-    columns: [
-      "id",
-      "platform_name",
-      "account_email",
-      "username",
-      "email_source",
-      "updated_at",
-    ],
-    order: [["id", "asc"]],
-  });
-  const identity = (a: Row) =>
-    vaultIdentity({
-      platform_name: String(a.platform_name),
-      account_email: String(a.account_email),
-      username: String(a.username),
-    });
-  const mutations: import("../storage/client").Mutation[] = [];
-  const additions: Row[] = [];
+  const mutations: Mutation[] = [],
+    additions: Row[] = [];
   const addresses = new Set<string>();
   let created = 0,
     updated = 0,
     skipped = 0;
-  for (const account of entries) {
-    const prior = existing.find((a) => identity(a) === vaultIdentity(account));
-    if (prior && mode === "skip") {
+  for (const plan of plans) {
+    const { account, prior, action } = plan;
+    if (action === "skip") {
       skipped++;
       continue;
     }
@@ -298,44 +419,38 @@ app.post("/import", async (c) => {
         {
           op: "assertExists",
           table: "platform_vault",
-          where: and(
-            ...Object.entries(prior).map(([key, value]) => eq(key, value)),
-          ),
+          where: vaultSnapshot(prior),
           message: "已有账号发生变化，请重新预览",
         },
         update("platform_vault", eq("id", prior.id), {
-          ...account,
+          ...Object.fromEntries(
+            (modes.update === "replace" ? importColumns : plan.fields).map(
+              (field) => [field, account[field]],
+            ),
+          ),
           updated_at: now(),
         }),
       );
       if (prior.email_source === "cf_domain")
-        addresses.add(String(prior.account_email));
+        addresses.add(deliveryAddress(prior));
       updated++;
     } else {
       additions.push(account);
       created++;
     }
     if (account.email_source === "cf_domain")
-      addresses.add(account.account_email);
+      addresses.add(deliveryAddress(account));
   }
   if (additions.length) {
-    // Check case-insensitive identities inside the serialized transaction. A
-    // concurrent import must never silently duplicate accounts or miscount rows.
-    // Keep each query below D1's 100 bound-parameter limit.
-    for (let offset = 0; offset < additions.length; offset += 25)
+    // Seven identity fields per row; keep assertions below D1's binding limit.
+    for (let offset = 0; offset < additions.length; offset += 12)
       mutations.unshift({
         op: "assertAbsent",
         table: "platform_vault",
         where: or(
           ...additions
-            .slice(offset, offset + 25)
-            .map((a) =>
-              and(
-                { field: "platform_name", op: "ieq", value: a.platform_name },
-                eq("account_email", a.account_email),
-                eq("username", a.username),
-              ),
-            ),
+            .slice(offset, offset + 12)
+            .map((row) => importIdentityFilter(row as VaultImportAccount)),
         ),
         message: "导入期间已有账号发生变化，请重新预览后重试",
       });
@@ -508,10 +623,10 @@ app.post("/", async (c) => {
           insert("temp_mailboxes", box),
           { op: "bindMailbox" as const, address: box.address },
         ]
-      : []),
+      : account.email_source === "cf_domain"
+        ? mailboxBinding(deliveryAddress(account))
+        : []),
   ]);
-  if (!box && account.email_source === "cf_domain")
-    await protectMailbox(c.env, account.account_email);
   return c.json({
     success: true,
     data: { id: result.lastId, account_email: account.account_email },
@@ -540,7 +655,34 @@ app.post("/batch", async (c) => {
     else invalid("批量整理仅支持 status、category、remark、is_pinned");
   }
   if (!Object.keys(patch).length) invalid("patch 不能为空");
+  const snapshots = await collect<PlatformAccount>(
+    db(c.env),
+    "platform_vault",
+    {
+      where: oneOf("id", ids),
+      columns: [
+        "id",
+        "updated_at",
+        "mailbox_address",
+        ...importIdentityColumns,
+      ],
+    },
+  );
+  if (snapshots.length !== ids.length)
+    throw new StorageError(
+      "STALE_PREVIEW",
+      "部分账号已不存在，请刷新后重新整理",
+      409,
+    );
+  for (const row of snapshots)
+    await authorizeVaultAccount(c.env, c.get("auth"), row);
   const results = await db(c.env).mutate([
+    ...snapshots.map((row): Mutation => ({
+      op: "assertExists",
+      table: "platform_vault",
+      where: vaultSnapshot(row),
+      message: "账号已发生变化，请刷新后重新整理",
+    })),
     {
       op: "assertExists",
       table: "platform_vault",
@@ -556,7 +698,21 @@ app.post("/batch", async (c) => {
   });
 });
 app.post("/:id/pin", async (c) => {
+  const id = integer(c.req.param("id"), "ID", 1, Number.MAX_SAFE_INTEGER);
+  const account = await db(c.env).first<PlatformAccount>(
+    "platform_vault",
+    eq("id", id),
+  );
+  if (!account)
+    return c.json({ success: false, message: "台账记录不存在" }, 404);
+  await authorizeVaultAccount(c.env, c.get("auth"), account);
   await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "platform_vault",
+      where: vaultSnapshot(account),
+      message: "账号已发生变化，请刷新后重试",
+    },
     {
       op: "update",
       table: "platform_vault",
@@ -577,14 +733,24 @@ app.put("/:id", async (c) => {
   );
   if (!existing)
     return c.json({ success: false, message: "台账记录不存在" }, 404);
+  await authorizeVaultAccount(c.env, c.get("auth"), existing);
   const account = validated({ ...existing, ...object(await c.req.json()) });
-  await db(c.env).mutate([
-    update("platform_vault", eq("id", id), { ...account, updated_at: now() }),
-  ]);
+  await authorizeVaultAccount(c.env, c.get("auth"), account);
+  const addresses = new Set<string>();
   if (existing.email_source === "cf_domain")
-    await protectMailbox(c.env, existing.account_email);
+    addresses.add(deliveryAddress(existing));
   if (account.email_source === "cf_domain")
-    await protectMailbox(c.env, account.account_email);
+    addresses.add(deliveryAddress(account));
+  await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "platform_vault",
+      where: vaultSnapshot(existing),
+      message: "账号已发生变化，请重新打开后保存",
+    },
+    update("platform_vault", eq("id", id), { ...account, updated_at: now() }),
+    ...[...addresses].flatMap(mailboxBinding),
+  ]);
   return c.json({ success: true, message: "台账已更新" });
 });
 app.get("/:id", async (c) => {
@@ -592,20 +758,32 @@ app.get("/:id", async (c) => {
     "platform_vault",
     eq("id", integer(c.req.param("id"), "ID", 1, Number.MAX_SAFE_INTEGER)),
   );
+  if (account) await authorizeVaultAccount(c.env, c.get("auth"), account);
   return account
     ? c.json({ success: true, data: account })
     : c.json({ success: false, message: "台账记录不存在" }, 404);
 });
 app.delete("/:id", async (c) => {
   const id = integer(c.req.param("id"), "ID", 1, Number.MAX_SAFE_INTEGER);
-  const [deleted] = await db(c.env).mutate([
-    remove("platform_vault", eq("id", id)),
-  ]);
-  const account = deleted.rows[0] as unknown as PlatformAccount | undefined;
+  const account = await db(c.env).first<PlatformAccount>(
+    "platform_vault",
+    eq("id", id),
+  );
   if (!account)
     return c.json({ success: false, message: "台账记录不存在" }, 404);
-  if (account.email_source === "cf_domain")
-    await protectMailbox(c.env, account.account_email);
+  await authorizeVaultAccount(c.env, c.get("auth"), account);
+  await db(c.env).mutate([
+    {
+      op: "assertExists",
+      table: "platform_vault",
+      where: vaultSnapshot(account),
+      message: "账号已发生变化，请刷新后重试",
+    },
+    remove("platform_vault", eq("id", id)),
+    ...(account.email_source === "cf_domain"
+      ? mailboxBinding(deliveryAddress(account))
+      : []),
+  ]);
   return c.json({ success: true, message: "台账已删除" });
 });
 app.get("/:id/code", async (c) => {
@@ -615,18 +793,19 @@ app.get("/:id/code", async (c) => {
   );
   if (!account)
     return c.json({ success: false, message: "台账记录不存在" }, 404);
-  const result = await lookupCode(
-    c.env,
-    account.account_email,
-    account.email_source,
-    {
-      since: since(c.req.query("since")),
-      sender: text(c.req.query("sender"), "发件人", 254),
-      keyword: text(c.req.query("q"), "关键词", 200),
-    },
-  );
+  await authorizeVaultAccount(c.env, c.get("auth"), account);
+  const result = await lookupVaultCode(c.env, account, {
+    since: since(c.req.query("since")),
+    sender: text(c.req.query("sender"), "发件人", 254),
+    keyword: text(c.req.query("q"), "关键词", 200),
+    match: choice(
+      c.req.query("match"),
+      "查询范围",
+      ["mailbox", "platform"] as const,
+      "mailbox",
+    ),
+  });
   if (result.error) return c.json(outlookFailure(result.error), 400);
-  await updateVaultCode(c.env, account, result.data);
   return c.json({ success: true, data: result.data });
 });
 export default app;

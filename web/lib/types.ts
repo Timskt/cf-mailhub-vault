@@ -49,6 +49,27 @@ export interface Vault {
   is_pinned: number;
   mailbox?: MailboxHealth;
   needs_attention?: boolean;
+  workspace?: string;
+  account_identifier?: string;
+  login_methods?: string;
+  mailbox_address?: string;
+  mailbox_link_state?: "auto" | "detached";
+  verification_sender?: string;
+  verification_keyword?: string;
+  registered_at?: string;
+  last_verified_at?: string;
+  expires_at?: string;
+}
+export interface MailboxIdentity {
+  id: string;
+  address: string;
+  source: string;
+  account_id: number | null;
+  health: MailboxHealth;
+  registration_count: number;
+  platform_count: number;
+  platforms: string[];
+  expires_at?: string;
 }
 export interface MailboxHealth {
   state:
@@ -182,6 +203,8 @@ export interface Code {
   sender?: string;
   received_at?: string;
   message?: string;
+  match_scope?: "platform" | "mailbox";
+  match_reason?: string;
 }
 export interface Preview {
   rows: {
@@ -200,6 +223,7 @@ export interface Preview {
 }
 export type PageName =
   | "vault"
+  | "identities"
   | "outlook"
   | "providers"
   | "mailboxes"

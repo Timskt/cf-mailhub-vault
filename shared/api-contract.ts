@@ -147,6 +147,81 @@ const codeFilters = {
   sender: s(254),
   q: s(200),
 };
+const verificationMatch = {
+  ...strEnum("mailbox", "platform"),
+  default: "mailbox",
+  description:
+    "mailbox 查询有效收件邮箱，不能确认属于某平台且不更新平台历史验证码；platform 仅用于 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配，缺少规则返回 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。",
+};
+const loginMethod = strEnum(
+  "password",
+  "google",
+  "microsoft",
+  "sso",
+  "magic_link",
+  "passkey",
+  "unknown",
+);
+const serializedLoginMethods = {
+  ...s(1000),
+  pattern:
+    '^\\s*\\[\\s*(?:"(?:password|google|microsoft|sso|magic_link|passkey|unknown)"(?:\\s*,\\s*"(?:password|google|microsoft|sso|magic_link|passkey|unknown)")*)?\\s*\\]\\s*$',
+  description:
+    '响应为 JSON 数组编码的字符串，例如 ["google","password"]；去重并排序，空数组归一为 ["unknown"]。',
+};
+const registrationTime = {
+  anyOf: [
+    { type: "string", const: "" },
+    { ...s(40), format: "date-time" },
+  ],
+  description:
+    "空字符串或含时区的 ISO 8601，保存后为 UTC；未登记时为空，不推断日期。",
+};
+const registrationInput = {
+  workspace: { ...s(100), default: "" },
+  account_identifier: { ...s(200), default: "" },
+  login_methods: {
+    oneOf: [
+      arr(loginMethod),
+      serializedLoginMethods,
+      { type: "string", const: "" },
+    ],
+    default: '["unknown"]',
+    description:
+      '接受数组或 JSON 数组字符串；省略、空字符串或空数组默认为 ["unknown"]。',
+  },
+  mailbox_address: {
+    anyOf: [address, { type: "string", const: "" }],
+    default: "",
+    description:
+      "实际收件地址；空字符串回退 account_email。别名必须显式映射，不推断别名。",
+  },
+  mailbox_link_state: {
+    ...strEnum("auto", "detached", ""),
+    default: "auto",
+    description:
+      "省略或空字符串归一为 auto；auto 按有效收件地址与 email_source 关联；detached 保留台账和保留保护，停止该平台注册的自动查收。",
+  },
+  verification_sender: { ...s(254), default: "" },
+  verification_keyword: { ...s(200), default: "" },
+  registered_at: registrationTime,
+  last_verified_at: registrationTime,
+  expires_at: registrationTime,
+};
+const registrationWire = {
+  ...registrationInput,
+  login_methods: serializedLoginMethods,
+  mailbox_link_state: { ...strEnum("auto", "detached"), default: "auto" },
+};
+const importModes = {
+  duplicate_mode: { ...strEnum("skip", "update"), default: "skip" },
+  update_mode: {
+    ...strEnum("merge", "replace"),
+    default: "merge",
+    description:
+      "duplicate_mode=update 时生效；merge 仅写明确提供的字段，replace 将省略字段恢复默认值。明确提供空值可清空字段。",
+  },
+};
 const vaultInput = {
   platform_name: { ...s(100), minLength: 1 },
   platform_url: s(2048),
@@ -159,6 +234,8 @@ const vaultInput = {
   category: s(100),
   proxy_node: s(300),
   remark: s(4000),
+  is_pinned: { type: ["integer", "boolean"], enum: [0, 1, false, true] },
+  ...registrationInput,
 };
 const platformInput = {
   name: { ...s(100), minLength: 1 },
@@ -362,7 +439,7 @@ const countsFor = (tables: string[]) =>
     false,
   );
 const backupCounts = countsFor(backupTables);
-const backupManifest = (version: 10 | 11 | 12, tables: string[]) =>
+const backupManifest = (version: 10 | 11 | 12 | 13, tables: string[]) =>
   obj(
     {
       format: { type: "string", const: "mailhub-backup" },
@@ -445,8 +522,14 @@ export const schemas: Record<string, Schema> = {
   ),
   Target: { ...obj(targetProperties), oneOf: targetRules },
   VerificationRequest: {
-    ...obj({ ...targetProperties, ...codeFilters }),
+    ...obj({ ...targetProperties, ...codeFilters, match: verificationMatch }),
     oneOf: targetRules,
+    allOf: [
+      {
+        if: { required: ["email"] },
+        then: { properties: { match: { const: "mailbox" } } },
+      },
+    ],
   },
   Code: obj(
     {
@@ -461,6 +544,8 @@ export const schemas: Record<string, Schema> = {
       checked_at: date,
       limited: bool,
       message: s(),
+      match_scope: strEnum("mailbox", "platform"),
+      match_reason: s(),
     },
     ["has_mail", "code", "link", "message"],
   ),
@@ -572,13 +657,15 @@ export const schemas: Record<string, Schema> = {
     },
     ["results", "summary", "completed_at"],
   ),
+  RegistrationMetadataInput: obj(registrationInput),
+  RegistrationMetadata: obj(registrationWire),
   VaultInput: obj(vaultInput, ["platform_name", "account_email"]),
   VaultImport: {
     ...obj({
       accounts: { ...arr(ref("VaultInput"), 200), minItems: 1 },
       raw_text: vaultRawText,
       platform_name: s(100),
-      duplicate_mode: { ...strEnum("skip", "update"), default: "skip" },
+      ...importModes,
     }),
     oneOf: [
       { required: ["accounts"], not: { required: ["raw_text"] } },
@@ -592,18 +679,31 @@ export const schemas: Record<string, Schema> = {
       error_count: n(0, 200),
       duplicate_count: n(0, 200),
       rows: arr(
-        obj(
-          {
-            line: n(1),
-            platform_name: s(100),
-            account_email: address,
-            username: s(254),
-            duplicate: bool,
-            error: s(),
-          },
-          ["line"],
-          false,
-        ),
+        {
+          ...obj(
+            {
+              line: n(1),
+              platform_name: s(100),
+              account_email: address,
+              username: s(254),
+              duplicate: bool,
+              provided_fields: arr(strEnum(...Object.keys(vaultInput))),
+              action: strEnum("create", "update", "skip"),
+              changed_fields: arr(strEnum(...Object.keys(vaultInput))),
+              existing_id: id,
+              error: s(),
+            },
+            ["line"],
+            false,
+          ),
+          oneOf: [
+            { required: ["error"] },
+            {
+              required: ["action", "changed_fields"],
+              not: { required: ["error"] },
+            },
+          ],
+        },
         200,
       ),
     },
@@ -624,6 +724,7 @@ export const schemas: Record<string, Schema> = {
   Vault: obj(
     {
       ...vaultInput,
+      ...registrationWire,
       id,
       is_pinned: flag,
       last_code: s(),
@@ -639,6 +740,7 @@ export const schemas: Record<string, Schema> = {
           ([k]) => !["password", "totp_secret"].includes(k),
         ),
       ),
+      ...registrationWire,
       id,
       has_password: flag,
       has_totp: {
@@ -653,6 +755,92 @@ export const schemas: Record<string, Schema> = {
       ...timestamps,
     },
     ["id", "platform_name", "account_email", "mailbox", "needs_attention"],
+  ),
+  MailboxIdentity: obj(
+    {
+      id: {
+        ...s(264),
+        pattern:
+          "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+        description:
+          "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。",
+      },
+      address,
+      source: sources,
+      account_id: { type: ["integer", "null"], minimum: 1 },
+      health: {
+        ...ref("Health"),
+        description:
+          "记录的连接健康状态。已过期且无保留保护的 CF 身份为 state=disabled、can_lookup=true：新邮件将被拒收，已保存的历史邮件仍可查询。",
+      },
+      registration_count: n(),
+      platform_count: n(),
+      platforms: arr(s(100)),
+      expires_at: date,
+      protected: bool,
+      affected_registrations: n(),
+    },
+    [
+      "id",
+      "address",
+      "source",
+      "account_id",
+      "health",
+      "registration_count",
+      "platform_count",
+      "platforms",
+      "expires_at",
+      "protected",
+      "affected_registrations",
+    ],
+    false,
+  ),
+  MailboxIdentitySummary: obj(
+    {
+      total_platforms: n(),
+      unique_addresses: n(),
+      total_registrations: n(),
+      total_connections: n(),
+      attention_connections: n(),
+      affected_registrations: n(),
+      due_registrations: n(),
+    },
+    [
+      "total_platforms",
+      "unique_addresses",
+      "total_registrations",
+      "total_connections",
+      "attention_connections",
+      "affected_registrations",
+      "due_registrations",
+    ],
+    false,
+  ),
+  MailboxIdentityRegistration: obj(
+    {
+      ...Object.fromEntries(
+        Object.entries(vaultInput).filter(
+          ([key]) => !["password", "totp_secret", "proxy_node"].includes(key),
+        ),
+      ),
+      ...registrationWire,
+      id,
+      is_pinned: flag,
+      last_code: s(),
+      last_code_at: date,
+      mailbox: ref("Health"),
+      needs_attention: bool,
+      ...timestamps,
+    },
+    [
+      "id",
+      "platform_name",
+      "account_email",
+      "email_source",
+      "mailbox",
+      "needs_attention",
+    ],
+    false,
   ),
   VaultPatch: {
     ...obj(
@@ -1211,8 +1399,13 @@ export const schemas: Record<string, Schema> = {
     ["id", "event", "created_at", "data"],
     false,
   ),
-  BackupManifest: backupManifest(12, backupTables),
+  BackupManifest: backupManifest(13, backupTables),
   BackupDocument: backupDocument("BackupManifest", backupTables),
+  Schema12BackupManifest: backupManifest(12, backupTables),
+  Schema12BackupDocument: backupDocument(
+    "Schema12BackupManifest",
+    backupTables,
+  ),
   Schema11BackupManifest: backupManifest(
     11,
     backupTables.filter((t) => t !== "provider_accounts"),
@@ -1225,7 +1418,7 @@ export const schemas: Record<string, Schema> = {
   LegacyBackupDocument: {
     ...backupDocument("LegacyBackupManifest", legacyBackupTables),
     description:
-      "兼容已发布的 schema 10 和 11：先严格校验原始 schema hash、字段及内容，schema 10 在内存中补出 platforms，旧版本均补出空 provider_accounts 并转为 schema 12。明文仅限脱敏预览。",
+      "兼容已发布的 schema 10/11/12：先严格校验各版本冻结的 schema hash、字段及内容。10 补出 platforms，10/11 补空 provider_accounts，所有旧版本补 registration 默认字段并转为 schema 13。明文仅限脱敏预览。",
   },
   EncryptedBackup: obj(
     {
@@ -1256,7 +1449,7 @@ export const schemas: Record<string, Schema> = {
     {
       format: { type: "string", const: "mailhub-backup" },
       version: { type: "integer", const: 1 },
-      schema_version: { type: "integer", const: 12 },
+      schema_version: { type: "integer", const: 13 },
       name: { type: "string", const: "便携业务备份" },
       limits: obj(
         {
@@ -1362,7 +1555,7 @@ const filters = [
   q(
     "mailbox",
     address,
-    "精确匹配账号邮箱，不区分大小写；用于邮件阅读器关联账号分页",
+    "精确匹配有效收件地址（mailbox_address 非空时使用，否则 account_email），不区分大小写；可结合 email_source 限定来源，用于邮件阅读器关联账号分页",
   ),
   q("platform", s(100), "精确平台名，不区分大小写"),
   q("category", s(100), "分类"),
@@ -1441,18 +1634,26 @@ function op(
       name: match[1],
       in: "path",
       required: true,
-      description:
-        match[1] === "id" ? "记录 ID" : `${match[1]}，作为路径段时 URL 编码`,
+      description: path.startsWith("/api/mailbox-identities/")
+        ? "邮箱身份 source:address（地址小写）；将整个 ID 作为一个路径段 URL 编码，如 mailtm%3Auser%2Balias%40example.com。"
+        : match[1] === "id"
+          ? "记录 ID"
+          : `${match[1]}，作为路径段时 URL 编码`,
       schema:
         match[1] === "id"
-          ? path.startsWith("/api/api-keys")
-            ? uuid
-            : path.includes("/deliveries/")
-              ? hash
-              : path.includes("storage")
-                ? s()
-                : id
+          ? path.startsWith("/api/mailbox-identities/")
+            ? (schemas.MailboxIdentity.properties as Record<string, Schema>).id
+            : path.startsWith("/api/api-keys")
+              ? uuid
+              : path.includes("/deliveries/")
+                ? hash
+                : path.includes("storage")
+                  ? s()
+                  : id
           : s(),
+      ...(path.startsWith("/api/mailbox-identities/")
+        ? { example: "mailtm:user+alias@example.com" }
+        : {}),
     }),
   );
   operations.push({
@@ -1537,7 +1738,7 @@ op(
     response: success(ref("MailboxInspection")),
     effects: "只读；不访问微软",
     description:
-      "按 email、vault_id 或唯一 platform 定位。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。",
+      "按 email、vault_id 或唯一 platform 定位。台账使用 mailbox_address（空则 account_email）与 email_source；detached 返回 409 MAILBOX_DETACHED。返回已记录的状态，不承诺实时可达；live_check 恒为 false。过期自建邮箱仍可读取历史邮件。",
   },
 );
 op(
@@ -1550,9 +1751,10 @@ op(
     body: ref("VerificationRequest"),
     example: endpointSample,
     response: success(ref("Verification")),
-    effects: "Outlook 会刷新并保存令牌及连接状态；不标已读、不打开链接",
+    effects:
+      "邮箱提供商可刷新令牌及连接状态；仅 match=platform 找到验证码且目标与规则未变时保存平台历史；不标已读、不打开链接",
     description:
-      "CF 与 Outlook 统一返回 data；outcome=found 或 empty。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。",
+      "CF、Outlook、Mail.tm/Mail.gw 统一返回 data；outcome=found 或 empty。match 默认为 mailbox，仅表示在邮箱中找到验证信息，不确认归属平台。match=platform 要求 vault_id 或唯一 platform，并按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配；无规则 409 VERIFICATION_RULE_REQUIRED，不回退整个邮箱。直接 email 使用 platform 模式返回 400 PLATFORM_TARGET_REQUIRED。台账按有效收件地址与来源查收，detached 返回 409 MAILBOX_DETACHED。台账目标额外返回 match_scope/match_reason。保存平台历史验证码前以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码。过滤用于业务匹配，不提供邮件隔离。失败返回 HTTP 错误码、error、retryable、retry_after。每轮建议间隔 10 秒、最多 3 分钟；固定 since 避免拿到旧邮件。",
     responseExample: {
       success: true,
       data: {
@@ -1582,12 +1784,20 @@ op(
       ["items"],
     ),
     example: {
-      items: [endpointSample, { vault_id: 1, since: endpointSample.since }],
+      items: [
+        endpointSample,
+        {
+          vault_id: 1,
+          match: "platform",
+          sender: "auth",
+          since: endpointSample.since,
+        },
+      ],
     },
     response: success(ref("BatchVerification")),
     effects: "最多并行 2 个；同一邮箱串行；Outlook 刷新令牌和状态",
     description:
-      "每批 1–5 项。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。",
+      "每批 1–5 项，各项均支持 match=mailbox|platform（默认 mailbox），目标和规则要求同 lookupVerification。HTTP 200 仅表示批次处理完成，必须检查每项 success。index 为原数组的零基下标；失败不会伪装为空邮箱。仅重试 retryable=true 的失败项。",
   },
 );
 op("get", "/api/external/code", "lookupCodeLegacy", "兼容取码接口", "自动化", {
@@ -1598,14 +1808,23 @@ op("get", "/api/external/code", "lookupCodeLegacy", "兼容取码接口", "自�
       strEnum("cf_domain", "outlook", "mailtm", "mailgw"),
       "仅用于明确 email 目标，消除同地址多个来源的歧义",
     ),
-    q("email", address, "邮箱地址", "user@example.com"),
-    q("platform", s(100), "唯一平台名称，email 优先"),
+    q(
+      "email",
+      address,
+      "显式邮箱地址优先于 platform，保持邮箱范围查询",
+      "user@example.com",
+    ),
+    q(
+      "platform",
+      s(100),
+      "无 email 时解析唯一平台注册，使用 mailbox_address（空则 account_email）与 email_source",
+    ),
     ...codeParams,
   ],
   response: { allOf: [ref("Code"), success()] },
   effects: "Outlook 刷新令牌及连接状态",
   description:
-    "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。",
+    "保留原有平铺响应 success/code/link；新接入推荐 lookupVerification。无显式 email 时解析唯一 platform，按 mailbox_address（空则 account_email）与 email_source 查收；多账号返回 409 AMBIGUOUS_TARGET，目标不存在返回 404 TARGET_NOT_FOUND，detached 返回 409 MAILBOX_DETACHED。显式 email 始终优先，即使同时传 platform 也保持邮箱范围查询，不应用平台注册的验证规则或 detached 状态。两种目标均仅按本次 since/sender/q 过滤，不更新平台历史验证码。没有匹配时 code/link 为空。微软失败历史上使用 HTTP 400。",
 });
 op(
   "post",
@@ -1734,7 +1953,7 @@ op("get", "/api/vault", "listVaultAccounts", "分页筛选平台账号", "平台
   parameters: [...pages, ...filters],
   response: paged(ref("VaultSummary")),
   description:
-    "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配邮箱且不区分大小写；响应 mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。",
+    "隐藏 password/totp_secret，以 has_password/has_totp（0/1）表示是否配置。mailbox 查询参数精确匹配有效收件地址（mailbox_address 空则 account_email）且不区分大小写，email_source 可限定来源。响应含 registration 元数据，login_methods 为 JSON 数组字符串。mailbox 对象是记录的邮箱状态，status 仅是手工登记状态，勿将 active 解释为授权正常。",
 });
 op("post", "/api/vault", "createVaultAccount", "登记平台账号", "平台账号", {
   conditionalGrants: [
@@ -1755,7 +1974,7 @@ op("post", "/api/vault", "createVaultAccount", "登记平台账号", "平台账�
     obj({ id, account_email: address }, ["id", "account_email"]),
   ),
   description:
-    "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。现有 CF 邮箱会被关联保护。",
+    "generate_email=true 或省略 account_email 会分配永久邮箱；自动分配及登记原子提交。支持 registration 元数据、登录方式及验证规则。mailbox_address 为空时回退 account_email，别名须显式映射；按有效地址与 email_source 关联并保护 CF 邮件。detached 停止此平台注册自动查收，仍保留保留保护。日期只接受空字符串或含时区 ISO 8601，不推断。",
 });
 op(
   "post",
@@ -1837,7 +2056,8 @@ op(
 op("put", "/api/vault/{id}", "updateVaultAccount", "编辑平台账号", "平台账号", {
   body: obj(vaultInput),
   example: { remark: "由自动化更新" },
-  description: "沿用现有行为，未提供字段保留原值。更新 CF 关联邮箱保护状态。",
+  description:
+    "未提供字段保留原值，明确空值可清除可选字段。支持 workspace/account_identifier/login_methods、mailbox_address/mailbox_link_state、验证规则和登记日期。按有效收件地址更新 CF 保护；detached 保留台账及保留保护。",
 });
 op(
   "delete",
@@ -1865,9 +2085,15 @@ op(
   "查收台账账号验证码",
   "平台账号",
   {
-    parameters: codeParams,
+    parameters: [
+      ...codeParams,
+      q("match", verificationMatch, String(verificationMatch.description)),
+    ],
     response: success(ref("Code")),
-    effects: "保存最近验证码；Outlook 刷新令牌及状态",
+    effects:
+      "仅 match=platform 找到验证码且 CAS 校验通过时保存平台历史；邮箱提供商可刷新令牌及状态",
+    description:
+      "按 mailbox_address（空则 account_email）与 email_source 查收。match 默认 mailbox，返回 match_scope/match_reason，邮箱结果不能确认归属平台；platform 按显式 sender/q 或登记规则匹配，无规则返回 409 VERIFICATION_RULE_REQUIRED。detached 返回 409 MAILBOX_DETACHED；不自动回退整个邮箱。match=platform 找到验证码后，写入 last_code/last_code_at 前在同一事务中以 CAS 核对目标、收件关联及验证规则；查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码，应刷新台账后重新查收。",
   },
 );
 op("get", "/api/vault/export", "exportVault", "导出完整平台台账", "平台账号", {
@@ -1895,12 +2121,20 @@ op(
   "脱敏预览平台账号文本导入",
   "平台账号",
   {
-    body: obj({ raw_text: vaultRawText, platform_name: s(100) }, ["raw_text"]),
-    example: vaultTextExample,
+    body: obj(
+      { raw_text: vaultRawText, platform_name: s(100), ...importModes },
+      ["raw_text"],
+    ),
+    example: {
+      ...vaultTextExample,
+      duplicate_mode: "update",
+      update_mode: "merge",
+    },
     response: ref("VaultImportPreview"),
-    effects: "只读解析，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
+    effects:
+      "只读解析及比对现有账号，不写账号或平台；认证、审计及可选幂等记录仍会更新。",
     description:
-      "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复，不检查库中已有账号。platform_name 用于补全缺失的平台名。",
+      "最多 200 条/1 MiB。返回原始物理行号、平台/邮箱/用户名和格式错误，不返回密码、TOTP 或原始行。结合库中现状及 duplicate_mode（skip|update，默认 skip）、update_mode（merge|replace，默认 merge）计算 rows[].action=create|update|skip、changed_fields 和可选 existing_id；provided_fields 表示输入明确提供的字段。valid_count 为文件内去重后的有效条数，duplicate_count/rows[].duplicate 仅表示文件内重复。platform_name 用于补全缺失的平台名。预览不锁定库中状态，提交时重新检查。",
   },
 );
 op("post", "/api/vault/import", "importVault", "导入平台台账", "平台账号", {
@@ -1913,11 +2147,104 @@ op("post", "/api/vault/import", "importVault", "导入平台台账", "平台账�
         email_source: "cf_domain",
       },
     ],
+    duplicate_mode: "update",
+    update_mode: "merge",
   },
   response: ref("VaultImportResult"),
   description:
-    "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。按不区分大小写的平台名、规范化邮箱及原样用户名识别重复，文件内同身份最后一条生效。duplicate_mode 默认 skip；显式 update 会使用导入记录完整更新已有账号，未提供的可选字段使用默认值。返回 created/updated/skipped 与文件内 duplicate_count；CF 地址自动保护。",
+    "accounts[] 与 raw_text 必须只提供一种；raw_text 可同时提供默认 platform_name。每批 1–200 条，文本最多 1 MiB；任意行无效时整批不写入。重复身份包含不区分大小写的平台名/规范化账号邮箱、原样 username、email_source、workspace、account_identifier 与规范化 login_methods；文件内同身份最后一条生效。accounts[] 省略来源默认 cf_domain；raw_text 省略来源时微软邮箱推断 outlook，其余 external。省略身份字段按默认值精确匹配，不作为通配条件。duplicate_mode 默认 skip；update_mode 默认 merge，仅更新输入明确提供的字段，省略的密码、TOTP 和元数据保留。明确 replace 才将省略可选字段恢复默认；明确空值可清除字段。返回 created/updated/skipped 与文件内 duplicate_count；按有效收件地址保护 CF 邮件。",
 });
+
+op(
+  "get",
+  "/api/mailbox-identities",
+  "listMailboxIdentities",
+  "分页查询邮箱身份",
+  "邮箱身份",
+  {
+    parameters: [
+      ...pages,
+      q("q", s(200), "地址或关联平台名称，包含匹配"),
+      q("source", sources, "精确邮箱来源"),
+    ],
+    response: obj(
+      {
+        success: { type: "boolean", const: true },
+        data: arr(ref("MailboxIdentity")),
+        page: n(1),
+        limit: n(1, 100),
+        total: n(),
+        summary: ref("MailboxIdentitySummary"),
+      },
+      ["success", "data", "page", "limit", "total", "summary"],
+      false,
+    ),
+    description:
+      "按来源和有效收件地址聚合已有连接及未接入的平台注册。支持 q/source/page/limit；total 是筛选后的身份数，summary 是全局汇总，不随筛选和分页改变。身份 id 为 source:小写地址，不能使用数字 ID。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。仅 admin grant、主密钥或管理员会话；这是 admin collection，资源受限 Key 一律 403 RESOURCE_SCOPE_REQUIRED，过滤条件不能解锁。",
+  },
+);
+op(
+  "get",
+  "/api/mailbox-identities/{id}",
+  "getMailboxIdentity",
+  "读取邮箱身份与连接状态",
+  "邮箱身份",
+  {
+    response: success(ref("MailboxIdentity")),
+    description:
+      "整个 source:address ID 须作为一个路径段 URL 编码。按有效收件地址与来源区分身份；返回登记数量、平台、保留保护及记录的连接健康状态，不返回邮箱凭据。已过期且无保留保护的 CF 身份 health.state=disabled、health.can_lookup=true；新邮件将被拒收，已保存的历史邮件仍可查询。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+  },
+);
+op(
+  "get",
+  "/api/mailbox-identities/{id}/registrations",
+  "listMailboxIdentityRegistrations",
+  "分页读取邮箱身份的平台注册",
+  "邮箱身份",
+  {
+    parameters: pages,
+    response: obj(
+      {
+        success: { type: "boolean", const: true },
+        data: arr(ref("MailboxIdentityRegistration")),
+        page: n(1),
+        limit: n(1, 100),
+        total: n(),
+        summary: obj(
+          { platforms: n(), registrations: n() },
+          ["platforms", "registrations"],
+          false,
+        ),
+      },
+      ["success", "data", "page", "limit", "total", "summary"],
+      false,
+    ),
+    description:
+      "整个 source:address ID 须 URL 编码。按 mailbox_address（空则 account_email）与精确 email_source 查询，包括 detached 台账；按 ID 升序分页。summary 汇总此身份全部平台及注册数，不受分页影响。返回 registration 元数据与 mailbox 健康，不含 password/totp_secret。无注册返回空数组。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+  },
+);
+op(
+  "get",
+  "/api/mailbox-identities/{id}/impact",
+  "getMailboxIdentityImpact",
+  "读取邮箱身份关联影响与保护",
+  "邮箱身份",
+  {
+    response: success(
+      obj(
+        {
+          identity: ref("MailboxIdentity"),
+          registrations: n(),
+          protected: bool,
+        },
+        ["identity", "registrations", "protected"],
+        false,
+      ),
+    ),
+    description:
+      "整个 source:address ID 须 URL 编码。返回 identity、注册总数和保留保护，供变更前核对影响；protected 包含永久邮箱或仍有注册引用，detached 不解除现有保留保护。affected_registrations 排除 detached。不存在返回 404。仅 admin grant、主密钥或管理员会话；作为 admin collection，资源受限 Key 即使指定 ID 也一律 403 RESOURCE_SCOPE_REQUIRED。",
+  },
+);
 
 op(
   "get",
@@ -3270,7 +3597,7 @@ op(
     auth: "cookie",
     response: success(ref("BackupCapabilities")),
     description:
-      "schema 12 共 13 张业务表，包括独立 platforms（空平台也保留）及 provider_accounts（外部邮箱密码与登录令牌）。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10 和 11 文件。",
+      "schema 13 共 13 张业务表，包括独立 platforms（空平台也保留）、provider_accounts（外部邮箱密码与登录令牌）及 platform_vault 的 registration 元数据。全部表合计 ≤1000 行、明文 JSON ≤1 MiB（含清单，导出预留清单开销）；含 R2 引用但不包含对象内容。控制态、管理员会话、API Key、OAuth、审计、幂等、Webhook、连接/协调器与 Worker 配置均排除。restore_available 需 STORAGE 协调器及至少 32 字符凭据加密密钥。兼容严格校验后的 schema 10/11/12 文件。",
   },
 );
 op(
@@ -3338,6 +3665,7 @@ for (const name of ["dry-run", "preview"] as const) {
                   ref("BackupDocument"),
                   ref("LegacyBackupDocument"),
                   ref("Schema11BackupDocument"),
+                  ref("Schema12BackupDocument"),
                 ],
               },
               passphrase: s(1024),
@@ -3354,7 +3682,7 @@ for (const name of ["dry-run", "preview"] as const) {
       response: success(ref("BackupPreview")),
       effects: "不修改业务数据；认证、审计及可选幂等记录仍会更新。",
       description:
-        "dry-run 与 preview 为同一处理器。支持 schema 12、11 和已发布的 schema 10；旧文件先验证原 schema hash、完整字段、逐表/整体 hash 及业务关联，schema 10 再确定性补出 platforms，两个旧版本均补出空 provider_accounts 并计算 schema 12 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。",
+        'dry-run 与 preview 为同一处理器。当前 schema 13，兼容已发布的 10/11/12；旧文件先验证冻结的原 schema hash、完整字段、逐表/整体 hash 及业务关联。10 补出 platforms，10/11 补空 provider_accounts；所有旧版本补齐 registration 默认值（login_methods=["unknown"] 的 JSON 字符串、mailbox_link_state=auto，其余为空字符串）并计算 schema 13 摘要。拒绝未知版本/字段，不能自行改版本号绕过。明文只接受不可恢复的脱敏文件。加密可恢复文件在配置 STORAGE、凭据密钥且 R2 引用齐全时返回绑定当前会话、转换后备份哈希、当前业务哈希和数据源的 10 分钟 confirmation_token。table_counts 使用转换后的 13 表范围，仍受合计 1000 行/1 MiB 限制。restorable=true 仅表示文件可恢复，应检查 confirmation_token 和 manifest.restore_available。backup 必须整体使用真实导出文件。',
     },
   );
 }
@@ -3385,7 +3713,7 @@ op(
     },
     response: success(ref("BackupRestoreResult")),
     effects:
-      "替换 12 张业务表（含 platforms）及指定偏好，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
+      "替换 12 张业务表（含 platforms、provider_accounts 和 registration 元数据）及 settings 指定偏好，共 13 表，在隔离 D1 数据集中校验后原子切换活动数据集；以当前实例密钥重新加密凭据。",
     description:
       "必须提供 Idempotency-Key、加密导出、原始口令、当前会话的有效预览令牌及 RESTORE_BACKUP 确认。目标需 STORAGE 协调器和凭据密钥；预览后业务/数据源变化、备份变化或令牌过期均拒绝恢复。R2 对象须先在目标桶恢复，控制态从目标实例保留。当前实现恢复到隔离的 D1 数据集；不是向现有活动表直接合并。结果未知时先读取活动数据源核对，绝不更换幂等键自动重执。",
   },
@@ -3902,6 +4230,9 @@ export function openApi(origin = "http://localhost:8787") {
         admin_scope_override: entry.auth === "admin" || entry.auth === "key",
         resource_restrictions_apply:
           entry.auth === "admin" || entry.auth === "key",
+        ...(entry.path.startsWith("/api/mailbox-identities")
+          ? { collection: true, resource_restricted_keys_allowed: false }
+          : {}),
         ...(entry.conditionalGrants
           ? { additional_grants: entry.conditionalGrants }
           : {}),
@@ -3910,7 +4241,9 @@ export function openApi(origin = "http://localhost:8787") {
             ? "仅有效管理员会话；主密钥和 admin scope 均不能代替。不要同时携带 API Key。"
             : entry.auth === "public"
               ? "无需认证。"
-              : "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。",
+              : entry.path.startsWith("/api/mailbox-identities")
+                ? "admin collection；主密钥、无资源限制的 admin Key 或管理员会话。资源受限 Key 对整个路由族均返回 403 RESOURCE_SCOPE_REQUIRED，指定 ID 或筛选也不能枚举。"
+                : "所列 grants 必须全部满足，admin 可替代 scope 检查但不能绕过资源限制。受限密钥不能使用未限定资源的聚合/台账列表；具体限制见指南。",
       },
       "x-idempotency": idempotent
         ? {
