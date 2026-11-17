@@ -183,6 +183,16 @@ test("vault export has a stable human-readable order and fills absent optional f
     "totp_secret",
     "proxy_node",
     "remark",
+    "workspace",
+    "account_identifier",
+    "login_methods",
+    "mailbox_address",
+    "mailbox_link_state",
+    "verification_sender",
+    "verification_keyword",
+    "registered_at",
+    "last_verified_at",
+    "expires_at",
   ]);
   const [header, row] = parseDelimited(
     serializeAccountText(
@@ -212,6 +222,7 @@ test("vault export has a stable human-readable order and fills absent optional f
     "",
     "",
     ' "保留空格"\n多行----内容 ',
+    ...Array(10).fill(""),
   ]);
   assert.throws(
     () => serializeAccountText([{ password: { private: "secret" } }], "vault"),
