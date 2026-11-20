@@ -35,6 +35,7 @@ interface PlannedMailbox {
   is_permanent: boolean;
   remark: string;
 }
+const maxBatchDomains = 20;
 
 export function BatchMailboxes({
   close,
@@ -46,7 +47,10 @@ export function BatchMailboxes({
   const w = useWorkspace();
   const domains = (w.settings?.domains || []).filter((d) => d.enabled);
   const [selected, setSelected] = useState(() =>
-    domains.filter((d) => d.is_default).map((d) => d.domain),
+    domains
+      .filter((d) => d.is_default)
+      .slice(0, maxBatchDomains)
+      .map((d) => d.domain),
   );
   const [domainSearch, setDomainSearch] = useState("");
   const [count, setCount] = useState(10),
@@ -64,6 +68,10 @@ export function BatchMailboxes({
   const allMatchingSelected =
     matchingDomains.length > 0 &&
     matchingDomains.every((domain) => selected.includes(domain.domain));
+  const matchingSelectionSize = new Set([
+    ...selected,
+    ...matchingDomains.map((domain) => domain.domain),
+  ]).size;
   const action = useAction({ inline: true });
   const addresses =
     created?.map((m) => m.address) ||
@@ -93,11 +101,19 @@ export function BatchMailboxes({
   const selectedDomains = domains.filter((domain) =>
     selected.includes(domain.domain),
   );
+  const validCount = Number.isInteger(count) && count >= 1 && count <= 100;
+  const samplePrefix =
+    (prefix.trim().toLowerCase() || "box").replace(/[^a-z0-9._+-]/g, "") ||
+    "box";
   const allocationPreview = selectedDomains.map((domain, index) => ({
     domain: domain.domain,
     amount:
-      Math.floor(count / Math.max(selectedDomains.length, 1)) +
-      (index < count % Math.max(selectedDomains.length, 1) ? 1 : 0),
+      Math.floor(
+        (validCount ? count : 0) / Math.max(selectedDomains.length, 1),
+      ) +
+      (index < (validCount ? count : 0) % Math.max(selectedDomains.length, 1)
+        ? 1
+        : 0),
   }));
   const currentStep = created ? 2 : preview ? 1 : 0;
   return (
@@ -105,7 +121,7 @@ export function BatchMailboxes({
       title={
         created ? "邮箱已批量分配" : preview ? "确认分配清单" : "批量分配邮箱"
       }
-      description="按域名配置顺序均匀分配，先预览后整批创建；每批最多 100 个。"
+      description="按已选域名均匀分配，先校对地址和有效期，再整批创建；每批最多 100 个。"
       close={action.busy ? () => {} : close}
       wide
       className="mailbox-batch-dialog"
@@ -162,14 +178,16 @@ export function BatchMailboxes({
                         <FieldLegend>分配到哪些域名</FieldLegend>
                         <div className="flex items-center gap-1">
                           <span className="mr-2 text-xs text-muted-foreground">
-                            {selected.length}/{domains.length} 个域名
+                            已选 {selected.length}/{maxBatchDomains} 个
                           </span>
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
                             disabled={
-                              !matchingDomains.length || allMatchingSelected
+                              !matchingDomains.length ||
+                              allMatchingSelected ||
+                              matchingSelectionSize > maxBatchDomains
                             }
                             onClick={() =>
                               setSelected((current) => [
@@ -207,6 +225,12 @@ export function BatchMailboxes({
                           placeholder="搜索启用域名…"
                         />
                       </div>
+                      {matchingSelectionSize > maxBatchDomains && (
+                        <p className="text-xs text-warning">
+                          当前匹配 {matchingDomains.length} 个域名，单批最多选择
+                          {maxBatchDomains} 个；请缩小搜索范围后全选。
+                        </p>
+                      )}
                       <div
                         data-testid="batch-domain-options"
                         className="max-h-48 overflow-y-auto rounded-md border p-2"
@@ -218,15 +242,25 @@ export function BatchMailboxes({
                                 key={domain.domain}
                                 label={domain.domain}
                                 checked={selected.includes(domain.domain)}
-                                onChange={(value) =>
+                                onChange={(value) => {
+                                  if (
+                                    value &&
+                                    !selected.includes(domain.domain) &&
+                                    selected.length >= maxBatchDomains
+                                  ) {
+                                    toast.info(
+                                      `每批最多选择 ${maxBatchDomains} 个域名`,
+                                    );
+                                    return;
+                                  }
                                   setSelected((current) =>
                                     value
                                       ? [...current, domain.domain]
                                       : current.filter(
                                           (item) => item !== domain.domain,
                                         ),
-                                  )
-                                }
+                                  );
+                                }}
                               />
                             ))}
                           </FieldGroup>
@@ -244,25 +278,37 @@ export function BatchMailboxes({
                         </AlertDescription>
                       </Alert>
                     )}
-                    <FieldGroup className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                      <TextField
-                        label="总数量"
-                        type="number"
-                        min={1}
-                        max={100}
-                        step={1}
-                        required
-                        value={count}
-                        onChange={(e) => setCount(Number(e.target.value))}
-                        help="按域名配置顺序均匀分配到已选域名。"
-                      />
+                    <FieldGroup className="batch-config-options grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div className="flex flex-col gap-2">
-                        <span className="text-sm font-medium">常用数量</span>
+                        <TextField
+                          label="总数量"
+                          type="number"
+                          min={1}
+                          max={100}
+                          step={1}
+                          required
+                          value={count}
+                          onChange={(e) => setCount(Number(e.target.value))}
+                        />
+                        {!validCount && (
+                          <p role="alert" className="text-xs text-destructive">
+                            请输入 1 到 100 之间的整数。
+                          </p>
+                        )}
+                        {validCount && selectedDomains.length > count && (
+                          <p role="alert" className="text-xs text-destructive">
+                            已选域名数超过生成数量。请增加数量或减少域名，确保每个域名至少分配
+                            1 个邮箱。
+                          </p>
+                        )}
                         <div
-                          className="flex flex-wrap gap-1.5"
+                          className="flex flex-wrap items-center gap-1.5"
                           role="group"
                           aria-label="批量数量快捷选择"
                         >
+                          <span className="mr-1 text-xs text-muted-foreground">
+                            常用数量
+                          </span>
                           {[10, 25, 50, 100].map((value) => (
                             <Button
                               key={value}
@@ -278,6 +324,9 @@ export function BatchMailboxes({
                             </Button>
                           ))}
                         </div>
+                        <p className="text-xs text-muted-foreground">
+                          平均分配到已选域名
+                        </p>
                       </div>
                       <TextField
                         label="用途前缀"
@@ -287,31 +336,46 @@ export function BatchMailboxes({
                         placeholder="例如：shopping、dev、news"
                         help="自动追加序号和随机后缀，避免地址冲突。"
                       />
+                      <div className="flex flex-col gap-4">
+                        <TextField
+                          label="用途备注"
+                          maxLength={500}
+                          value={remark}
+                          onChange={(e) => setRemark(e.target.value)}
+                          placeholder="例如：购物账号专用，按商店分别登记"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          用途前缀与递增编号会自动写入邮箱地址。
+                        </p>
+                      </div>
+                      <div className="flex flex-col gap-4">
+                        <SelectField
+                          label="邮箱有效期"
+                          value={duration}
+                          onChange={setDuration}
+                          disabled={permanent}
+                          options={[
+                            ["60", "1 小时"],
+                            ["1440", "1 天"],
+                            ["10080", "7 天"],
+                            ["43200", "30 天"],
+                          ]}
+                        />
+                        <CheckField
+                          label="永久保留这些地址"
+                          checked={permanent}
+                          onChange={setPermanent}
+                        />
+                      </div>
+                      <div className="batch-address-sample">
+                        <span className="text-xs text-muted-foreground">
+                          地址示例
+                        </span>
+                        <code>
+                          {`${samplePrefix}-01-XXXXXXXX@${selectedDomains[0]?.domain || "your-domain.example"}`}
+                        </code>
+                      </div>
                     </FieldGroup>
-                    <TextField
-                      label="用途备注"
-                      maxLength={500}
-                      value={remark}
-                      onChange={(e) => setRemark(e.target.value)}
-                      placeholder="例如：购物账号专用，按商店分别登记"
-                    />
-                    <SelectField
-                      label="邮箱有效期"
-                      value={duration}
-                      onChange={setDuration}
-                      disabled={permanent}
-                      options={[
-                        ["60", "1 小时"],
-                        ["1440", "1 天"],
-                        ["10080", "7 天"],
-                        ["43200", "30 天"],
-                      ]}
-                    />
-                    <CheckField
-                      label="永久保留这些地址"
-                      checked={permanent}
-                      onChange={setPermanent}
-                    />
                   </FieldGroup>
                 </div>
                 <aside
@@ -326,7 +390,9 @@ export function BatchMailboxes({
                   <dl className="batch-summary-facts">
                     <div>
                       <dt>目标域名</dt>
-                      <dd>{selectedDomains.length}</dd>
+                      <dd>
+                        {selectedDomains.length}/{maxBatchDomains}
+                      </dd>
                     </div>
                     <div>
                       <dt>有效期</dt>
@@ -559,7 +625,12 @@ export function BatchMailboxes({
             <BusyButton
               type="submit"
               busy={action.busy}
-              disabled={!selected.length}
+              disabled={
+                !selected.length ||
+                selected.length > maxBatchDomains ||
+                !validCount ||
+                selected.length > count
+              }
             >
               预览地址
             </BusyButton>

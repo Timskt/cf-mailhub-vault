@@ -58,7 +58,7 @@ test("batch domain picker stays compact with many domains and filters the list",
   await dialog
     .getByRole("button", { name: "全选当前结果", exact: true })
     .click();
-  await expect(dialog.getByText("1/42 个域名", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("已选 1/20 个", { exact: true })).toBeVisible();
   await expect(
     dialog.getByRole("complementary", { name: "本次批量分配摘要" }),
   ).toContainText("fixture-40.test");
@@ -66,9 +66,45 @@ test("batch domain picker stays compact with many domains and filters the list",
     dialog.getByRole("complementary", { name: "本次批量分配摘要" }),
   ).toContainText("10");
   await dialog.getByLabel("搜索启用域名", { exact: true }).fill("");
+  await expect(
+    dialog.getByRole("button", { name: "全选当前结果", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "清空所选", exact: true }).click();
+  await dialog.getByLabel("搜索启用域名", { exact: true }).fill("fixture-0");
   await dialog
     .getByRole("button", { name: "全选当前结果", exact: true })
     .click();
+  await dialog.getByLabel("搜索启用域名", { exact: true }).fill("fixture-1");
+  await dialog
+    .getByRole("button", { name: "全选当前结果", exact: true })
+    .click();
+  await expect(
+    dialog.getByText("已选 19/20 个", { exact: true }),
+  ).toBeVisible();
+  await dialog.getByLabel("搜索启用域名", { exact: true }).fill("fixture-30");
+  await dialog
+    .getByTestId("batch-domain-options")
+    .getByRole("checkbox", { name: "fixture-30.test" })
+    .click();
+  await expect(
+    dialog.getByText("已选 20/20 个", { exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByText(/确保每个域名至少分配 1 个邮箱/)).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "预览地址", exact: true }),
+  ).toBeDisabled();
+  await dialog.getByLabel("搜索启用域名", { exact: true }).fill("fixture-4");
+  await expect(
+    dialog.getByRole("button", { name: "全选当前结果", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    dialog.getByText(/当前匹配 1 个域名，单批最多选择\s*20\s*个/),
+  ).toBeVisible();
+  await dialog.getByLabel("搜索启用域名", { exact: true }).fill("");
+  await dialog.getByRole("button", { name: "100", exact: true }).click();
+  await expect(dialog.getByText(/确保每个域名至少分配 1 个邮箱/)).toHaveCount(
+    0,
+  );
   const options = dialog.getByTestId("batch-domain-options");
   const bounds = await options.evaluate((element) => ({
     clientHeight: element.clientHeight,
@@ -76,13 +112,12 @@ test("batch domain picker stays compact with many domains and filters the list",
   }));
   expect(bounds.clientHeight).toBeLessThanOrEqual(200);
   expect(bounds.scrollHeight).toBeGreaterThan(bounds.clientHeight);
-  await dialog.getByRole("button", { name: "100", exact: true }).click();
   await dialog.getByRole("button", { name: "预览地址", exact: true }).click();
   const preview = page.getByRole("dialog", {
     name: "确认分配清单",
     exact: true,
   });
-  await expect(preview.getByText("42 个域名", { exact: true })).toBeVisible();
+  await expect(preview.getByText("20 个域名", { exact: true })).toBeVisible();
   await expect(
     preview.getByRole("table", { name: "邮箱分配清单" }).getByRole("row"),
   ).toHaveCount(101);
@@ -180,7 +215,7 @@ test("batch mailbox preview summarizes domains and remains usable on mobile", as
   await dialog
     .getByRole("button", { name: "全选当前结果", exact: true })
     .click();
-  await expect(dialog.getByText("1/2 个域名", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("已选 1/20 个", { exact: true })).toBeVisible();
   await dialog.getByLabel("搜索启用域名", { exact: true }).fill("");
   await dialog
     .getByRole("button", { name: "全选当前结果", exact: true })

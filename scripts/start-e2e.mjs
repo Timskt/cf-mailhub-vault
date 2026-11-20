@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 const state = await mkdtemp(join(tmpdir(), "mailhub-e2e-"));
+const port = process.env.MAILHUB_E2E_PORT || "8789";
 const config = [
   "--local",
   "--config",
@@ -37,7 +38,7 @@ try {
     "--file",
     "scripts/seed-local.sql",
   ]);
-  await run(["dev", ...config, "--ip", "127.0.0.1", "--port", "8789"]);
+  await run(["dev", ...config, "--ip", "127.0.0.1", "--port", port]);
 } finally {
   await rm(state, { recursive: true, force: true });
 }

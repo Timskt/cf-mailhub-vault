@@ -52,7 +52,6 @@ import {
 import { useWorkspace } from "@/lib/context";
 import { mailHtml } from "@/lib/mail-html";
 import { generatePassword } from "@/lib/password-generator";
-import { cn } from "@/lib/utils";
 import {
   ArrowLeft,
   ExternalLink,
@@ -93,6 +92,7 @@ type Catalog = {
 };
 const name = (provider: string) =>
   mailProviders.find((p) => p.id === provider)?.name || provider;
+const providerLayoutPreference = "mailhub:providers:layout";
 
 export default function ProvidersPage({
   initialQuery = "",
@@ -104,8 +104,16 @@ export default function ProvidersPage({
     [provider, setProvider] = useState(""),
     [status, setStatus] = useState("all"),
     [page, setPage] = useState(1),
-    [limit, setLimit] = useState(30),
-    [layout, setLayout] = useState<"comfortable" | "compact">("compact");
+    [limit, setLimit] = useState(30);
+  const [layout, setLayout] = useState<"comfortable" | "compact">(() => {
+    try {
+      return localStorage.getItem(providerLayoutPreference) === "comfortable"
+        ? "comfortable"
+        : "compact";
+    } catch {
+      return "compact";
+    }
+  });
   const [selected, setSelected] = useState<Map<number, ProviderAccountSummary>>(
     () => new Map(),
   );
@@ -285,7 +293,7 @@ export default function ProvidersPage({
     <>
       <PageHeader
         title="外部邮箱"
-        description="把临时邮箱服务商的账号接入工作区，统一查收、取码和关联平台账号。"
+        description="统一查收第三方邮箱并关联平台账号。共享临时邮箱可能限流或回收；长期使用优先选择自有域名或 Outlook。"
       >
         <Button
           variant="outline"
@@ -300,9 +308,10 @@ export default function ProvidersPage({
         </Button>
       </PageHeader>
       <div
-        className="mb-3 flex flex-wrap items-center gap-2"
+        className="provider-source-filters mb-3"
         role="group"
         aria-label="按邮箱来源筛选"
+        tabIndex={0}
       >
         <Button
           size="sm"
@@ -312,28 +321,52 @@ export default function ProvidersPage({
         >
           全部来源 <span className="tabular-nums">{accountCount}</span>
         </Button>
-        {mailProviders.map((p) => {
-          const stats = catalog.result?.data.find((s) => s.id === p.id);
-          return (
-            <Button
-              key={p.id}
-              size="sm"
-              variant={provider === p.id ? "secondary" : "outline"}
-              aria-pressed={provider === p.id}
-              onClick={() => filterProvider(p.id)}
-            >
-              {p.name}
-              <span className="tabular-nums">
-                {stats?.account_count ?? "—"}
-              </span>
-              {!!stats?.attention_count && (
-                <span className="text-destructive">
-                  {stats.attention_count} 需处理
-                </span>
-              )}
-            </Button>
-          );
-        })}
+        {[
+          {
+            label: "短期邮箱",
+            providers: mailProviders.filter((item) => item.canCreate),
+          },
+          {
+            label: "QA 测试 Inbox",
+            providers: mailProviders.filter((item) => !item.canCreate),
+          },
+        ].map((group) => (
+          <div
+            key={group.label}
+            className="provider-source-group"
+            role="group"
+            aria-label={`${group.label}来源`}
+          >
+            <span className="provider-source-label">{group.label}</span>
+            {group.providers.map((p) => {
+              const stats = catalog.result?.data.find((s) => s.id === p.id);
+              return (
+                <Button
+                  key={p.id}
+                  size="sm"
+                  variant={provider === p.id ? "secondary" : "outline"}
+                  aria-pressed={provider === p.id}
+                  title={
+                    p.canCreate
+                      ? "共享短期邮箱，域名和保留时间由服务商决定"
+                      : "面向邮件自动化测试的服务，不是通用临时邮箱"
+                  }
+                  onClick={() => filterProvider(p.id)}
+                >
+                  {p.name}
+                  <span className="tabular-nums">
+                    {stats?.account_count ?? "—"}
+                  </span>
+                  {!!stats?.attention_count && (
+                    <span className="text-destructive">
+                      {stats.attention_count} 需处理
+                    </span>
+                  )}
+                </Button>
+              );
+            })}
+          </div>
+        ))}
         <Button
           size="sm"
           variant={status === "attention" ? "secondary" : "outline"}
@@ -444,7 +477,11 @@ export default function ProvidersPage({
         </div>
       </details>
       <ActionError message={action.error || catalog.error} />
-      <div className="data-panel" aria-busy={rows.loading}>
+      <div
+        className="data-panel provider-account-panel"
+        data-account-layout={layout}
+        aria-busy={rows.loading}
+      >
         <div className="filter-bar">
           <SearchBox
             value={q}
@@ -486,9 +523,15 @@ export default function ProvidersPage({
           />
           <Tabs
             value={layout}
-            onValueChange={(value) =>
-              setLayout(value as "comfortable" | "compact")
-            }
+            onValueChange={(value) => {
+              const next = value as "comfortable" | "compact";
+              setLayout(next);
+              try {
+                localStorage.setItem(providerLayoutPreference, next);
+              } catch {
+                // Keep the preference for this view when storage is unavailable.
+              }
+            }}
           >
             <TabsList aria-label="账号列表密度">
               <TabsTrigger value="comfortable" title="舒展列表">
@@ -554,11 +597,11 @@ export default function ProvidersPage({
             description="Mail.tm / Mail.gw 可创建短期邮箱；MailSlurp 与 Mailinator 是需 API Key 的邮件测试服务。长期账号优先使用自有域名或 Outlook。"
           />
         ) : (
-          <div className={cn("divide-y", layout === "compact" && "xl:hidden")}>
+          <div className="provider-account-cards divide-y">
             {rows.result.data.map((a) => (
               <article
                 key={a.id}
-                className="flex min-w-0 flex-col gap-3 p-4 sm:flex-row sm:items-center"
+                className="provider-account-row flex min-w-0 flex-col gap-3 p-4 sm:flex-row sm:items-center"
                 aria-label={`外部邮箱 ${a.address}`}
               >
                 <div className="min-w-0 flex-1">
@@ -601,12 +644,7 @@ export default function ProvidersPage({
           </div>
         )}
         {!rows.error && rows.result?.data.length ? (
-          <div
-            className={cn(
-              "hidden overflow-x-auto",
-              layout === "compact" ? "xl:block" : "xl:hidden",
-            )}
-          >
+          <div className="provider-account-table overflow-x-auto">
             <Table aria-label="外部邮箱账号紧凑列表" className="min-w-[940px]">
               <TableHeader>
                 <TableRow>

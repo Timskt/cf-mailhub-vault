@@ -4,19 +4,20 @@ MailHub 支持 [Mail.tm](https://docs.mail.tm/)、[Mail.gw](https://docs.mail.gw
 
 ## 来源选择
 
-- **Mail.tm / Mail.gw**：免费共享临时邮箱，适合短期测试。官方文档标注每个 IP 通用额度为 8 QPS；邮箱、域名和保留时间由服务商控制，可能被限流或回收。两者兼容同一 API 家族，但账号、邮件和可用性互不共享。
+- **Mail.tm / Mail.gw**：免费共享临时邮箱，只建议短期测试。官方文档标注每个 IP 通用额度为 8 QPS；邮箱、域名和保留时间由服务商控制，可能被限流或回收。两者兼容同一 API 家族，但账号、邮件和可用性互不共享。MailHub 的 2026-11-17 生产检查曾观察到 Mail.tm 返回 429、Mail.gw 返回上游错误，见[发布验收](PRODUCTION-RELEASE-2026-11-17-PROVIDERS.md)。
 - **MailSlurp**：邮件测试 API，可接入已有 Inbox。官方免费计划的 Inbox 仅临时保留；付费计划才包含固定数量的长期 Inbox，邮件量和自定义域另受计划限制。适合需要隔离测试收件箱的场景，不应当作免费的长期个人邮箱。
 - **Mailinator Private**：QA/CI 邮件测试服务，使用自己的 Team API Token 和已验证私有域。官方 Verified Pro 页面列出 1 个私有域、每月 2,000 封、每天 60 封和 10 MB 存储；超出额度或存储上限会影响后续邮件。该服务并不提供个人邮箱式的无限收件保证。
 - **自有域名 / Outlook**：长期管理平台注册账号时优先选择自己控制的收件域名或 Outlook 授权邮箱。外部临时邮箱服务无法保证第三方网站接受该域名，也无法恢复被服务商回收的地址。
 
-MailSlurp 与 Mailinator 都是邮件测试产品，不适合作为 MailHub 的主力邮箱来源；目前仅保留为可选 QA 来源，不与自有域名或 Outlook 并列推荐。Mail.tm / Mail.gw 也属于可能限流或回收地址的共享临时邮箱。若它们反复报错或回收地址，不应靠重复重试解决，应迁移至自己控制的邮箱或收件域名。
+MailSlurp 与 Mailinator 都是邮件测试产品，不适合作为 MailHub 的主力邮箱来源；目前仅保留为可选 QA 来源，不与自有域名或 Outlook 并列推荐。Mail.tm / Mail.gw 同样不是稳定邮箱，生产已观察到限流和上游错误。没有证据支持把另一个免费的公共临时邮箱称为稳定替代品；反复报错或回收地址时，应迁移至自己控制的收件域名或已授权 Outlook。
 
-如果需要把多个已有 Gmail、Outlook 或 IMAP 邮箱统一接入，现阶段有两个更匹配的候选，但都不是 MailHub 当前已接入的服务：
+### 更稳定的替代路径
 
-- **Nylas**：托管式统一 Email API，通过 grant 连接 Gmail、Microsoft 个人/企业邮箱、Yahoo、iCloud 和 IMAP；不用自己运行邮件同步服务器。官方当前免费计划包含 5 个连接邮箱，Essentials 从 `$15/月` 含 10 个邮箱，超额按账号计费。IMAP 数据有 90 天滚动缓存，仍可直查上游。适合少量邮箱、希望降低运维成本的情况；邮件数据和 OAuth 授权交给第三方托管，且账号多时费用随账号数增长。参考[官方产品文档](https://developer.nylas.com/docs/v3/email/)、[IMAP 说明](https://developer.nylas.com/docs/provider-guides/imap/)和[价格](https://www.nylas.com/pricing/)。
-- **EmailEngine**：自托管统一 API，支持通用 IMAP、Gmail API 与 Microsoft Graph，并管理 OAuth 续期。需要自己维护服务器、Redis、密钥和监控；官方提供 14 天试用，生产订阅当前约 `$199/月`，适合重视自托管控制或账号量较多的部署。参考[IMAP API](https://learn.emailengine.app/docs/imap-api)、[快速开始](https://learn.emailengine.app/docs/getting-started/quick-start)和[授权说明](https://learn.emailengine.app/docs/licensing)。
+- **自有域名 + MailHub Email Worker（优先）**：使用 Cloudflare 管理 DNS 的域名创建地址，MailHub 通过 Email Worker 收件并保存邮件。Cloudflare Email Routing 要求 Cloudflare 作为权威 DNS；Cloudflare 默认路由本身是转发能力，MailHub 的收件归档依赖项目的 Worker 路由配置。适合需要长期保留地址、批量创建和掌控域名的场景。参考 [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/) 与 [Email Workers](https://developers.cloudflare.com/email-routing/email-workers/)。
+- **EmailEngine（自托管，尚未接入）**：统一读取已有 IMAP、Gmail API 和 Microsoft Graph 邮箱，并负责重连与 OAuth 令牌刷新；可用于接入自己控制的邮箱，不负责创建新的公共临时邮箱。生产运行需要自托管服务、Redis 与加密配置，且需要订阅许可；费用以[当前官方计划](https://learn.emailengine.app/docs/licensing)为准。参考[账号 API](https://learn.emailengine.app/docs/api-reference/accounts-api)及[通用 IMAP](https://learn.emailengine.app/docs/accounts/imap-smtp)。
+- **Nylas（托管式，尚未接入）**：适合少量已有邮箱的统一 API 接入，代价是授权与邮件数据交给第三方。官方当前免费层含 5 个连接账号，Essentials 含 10 个、额外账号按量计费；IMAP 邮件缓存为 90 天滚动窗口。价格会变化，部署前查看[官方价格](https://www.nylas.com/pricing/)和[Email API](https://developer.nylas.com/docs/v3/email/)。
 
-推荐顺序：少量、免运维可以先评估 Nylas 免费层；要自托管和统一管理多种 IMAP 账号则评估 EmailEngine；如果主要是 Outlook，继续使用 MailHub 原生 Outlook OAuth，避免再引入中间商。部署前先用测试账户验证授权、收件完整度、成本和数据保留，再接入主账号。MailHub 当前并未连接这两个聚合器，也不会把它们标记为已测试可用。
+EmailEngine 和 Nylas 都是已有邮箱聚合器，不是 Mail.tm / Mail.gw 的无缝替换：接入前需要为新来源设计独立凭据、授权、健康状态和邮件同步接口。目前 MailHub 尚未连接它们，也没有用真实账号验证其适配。
 
 ## 接入与管理
 

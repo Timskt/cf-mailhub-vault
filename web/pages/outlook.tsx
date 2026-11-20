@@ -63,11 +63,13 @@ import {
   Download,
   FolderInput,
   KeyRound,
+  List,
   Link,
   Mail,
   Pencil,
   Plus,
   Power,
+  Rows3,
   ShieldCheck,
   Tags,
   Trash2,
@@ -91,6 +93,7 @@ function connectionStatus(a: Outlook) {
         ? "error"
         : a.auth_status;
 }
+const outlookViewPreference = "mailhub:outlook:view";
 function needsRecovery(a: Outlook) {
   return (
     a.status === "active" &&
@@ -223,6 +226,15 @@ export default function OutlookPage({
   const [group, setGroup] = useState("");
   const [tag, setTag] = useState("");
   const [status, setStatus] = useState("");
+  const [density, setDensity] = useState<"compact" | "comfortable">(() => {
+    try {
+      return localStorage.getItem(outlookViewPreference) === "comfortable"
+        ? "comfortable"
+        : "compact";
+    } catch {
+      return "compact";
+    }
+  });
   const [selected, setSelected] = useState<number[]>([]);
   const [editor, setEditor] = useState<Partial<Outlook> | null>(null);
   const [importing, setImporting] = useState(false);
@@ -259,6 +271,14 @@ export default function OutlookPage({
     t = tags.result?.data || [];
   const filter = (fn: (s: string) => void) => (s: string) => {
     fn(s);
+    setPage(1);
+    setSelected([]);
+  };
+  const chooseSummaryFilter = (value: string) => {
+    setQ("");
+    setGroup("");
+    setTag("");
+    setStatus(value);
     setPage(1);
     setSelected([]);
   };
@@ -477,7 +497,11 @@ export default function OutlookPage({
           close={() => setVerification(null)}
         />
       )}
-      <div className="health-strip">
+      <div
+        className="health-strip"
+        role="group"
+        aria-label="Outlook 账号状态筛选"
+      >
         {[
           ["total", "全部账号"],
           ["healthy", "连接正常"],
@@ -485,7 +509,14 @@ export default function OutlookPage({
           ["unchecked", "尚未检查"],
           ["disabled", "已停用"],
         ].map(([key, name]) => (
-          <div key={key}>
+          <button
+            key={key}
+            type="button"
+            aria-pressed={
+              status === (key === "total" ? "" : key) && !q && !group && !tag
+            }
+            onClick={() => chooseSummaryFilter(key === "total" ? "" : key)}
+          >
             <span>{name}</span>
             <strong>
               {rows.result?.summary?.[key] ?? "—"}
@@ -493,7 +524,7 @@ export default function OutlookPage({
                 <ShieldCheck className="size-4 text-success" />
               )}
             </strong>
-          </div>
+          </button>
         ))}
       </div>
       <RepairPanel
@@ -506,7 +537,11 @@ export default function OutlookPage({
           setSelected([]);
         }}
       />
-      <div className="data-panel" aria-busy={rows.loading}>
+      <div
+        className="data-panel outlook-account-panel"
+        data-density={density}
+        aria-busy={rows.loading}
+      >
         <div className="filter-bar">
           <SearchBox
             value={q}
@@ -559,6 +594,29 @@ export default function OutlookPage({
               ["100", "每页 100 条"],
             ]}
           />
+          <Tabs
+            value={density}
+            onValueChange={(value) => {
+              const next = value as "compact" | "comfortable";
+              setDensity(next);
+              try {
+                localStorage.setItem(outlookViewPreference, next);
+              } catch {
+                // Keep the preference for this view when storage is unavailable.
+              }
+            }}
+          >
+            <TabsList aria-label="Outlook 账号行密度">
+              <TabsTrigger value="compact" title="紧凑行，适合大量账号">
+                <Rows3 data-icon="inline-start" />
+                紧凑
+              </TabsTrigger>
+              <TabsTrigger value="comfortable" title="舒展行">
+                <List data-icon="inline-start" />
+                舒展
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <RefreshButton onClick={rows.reload} busy={rows.loading} />
           <Menu
             label="Outlook 管理"
@@ -669,8 +727,8 @@ export default function OutlookPage({
           </Blank>
         ) : (
           <>
-            <div className="desktop-table">
-              <Table>
+            <div className="desktop-table outlook-account-table">
+              <Table className="min-w-[850px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-10">

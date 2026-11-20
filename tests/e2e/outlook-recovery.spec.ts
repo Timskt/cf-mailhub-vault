@@ -104,6 +104,20 @@ test("Outlook account selection persists across pages and page size can increase
   await login(page);
   const table = page.getByRole("table").first();
   await expect(table.getByRole("row")).toHaveCount(31);
+  await expect(
+    page.getByRole("button", { name: /连接正常 45/ }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.getByRole("button", { name: /连接正常 45/ }).click();
+  await expect(
+    page.getByRole("button", { name: /连接正常 45/ }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("tab", { name: "舒展", exact: true }).click();
+  await expect(table).toBeHidden();
+  await expect(
+    page.locator(".mobile-records").getByText("member-001@outlook.test"),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "紧凑", exact: true }).click();
+  await expect(table).toBeVisible();
   await page.getByRole("checkbox", { name: "选择本页全部账号" }).click();
   await expect(
     page.getByText("已选 30 个 · 本页 30 个", { exact: true }),
@@ -123,6 +137,19 @@ test("Outlook account selection persists across pages and page size can increase
   await expect(
     page.getByText("已选 45 个 · 本页 15 个", { exact: true }),
   ).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole("tab", { name: "紧凑", exact: true }),
+  ).toHaveAttribute("data-state", "active");
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(table).toBeVisible();
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(table).toBeHidden();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
 });
 
 test("repair panel, state-bound code extraction, explicit exchange and nested config export work on mobile", async ({
@@ -409,6 +436,8 @@ test("automatic callback accepts only the current popup and state, and closes ow
     await route.fulfill({ json: data });
   });
   await login(page);
+  const callbackUrl = new URL("/api/outlook/oauth/callback", page.url()).href;
+  const oauthReturnUrl = new URL("/__e2e_oauth_return", page.url()).href;
   await page.route("**/api/outlook/oauth/start", async (route) => {
     expect(route.request().postDataJSON().mode).toBe("web");
     await route.fulfill({
@@ -420,7 +449,7 @@ test("automatic callback accepts only the current popup and state, and closes ow
           state: "fake-web-state",
           client_id: "11111111-2222-4333-8444-555555555555",
           expires_at: Math.floor(Date.now() / 1000) + 600,
-          redirect_uri: "http://127.0.0.1:8789/api/outlook/oauth/callback",
+          redirect_uri: callbackUrl,
         },
       },
     });
@@ -460,10 +489,8 @@ test("automatic callback accepts only the current popup and state, and closes ow
   await expect(dialog.getByText("授权凭据已保存", { exact: true })).toHaveCount(
     0,
   );
-  await popup.evaluate(() => {
-    location.href = "http://127.0.0.1:8789/__e2e_oauth_return";
-  });
-  await popup.waitForURL("http://127.0.0.1:8789/__e2e_oauth_return");
+  await popup.evaluate((url) => (location.href = url), oauthReturnUrl);
+  await popup.waitForURL(oauthReturnUrl);
   await popup.evaluate(
     (message) =>
       window.opener.postMessage(

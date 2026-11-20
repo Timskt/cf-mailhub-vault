@@ -294,6 +294,9 @@
   .health-strip > div {
     @apply flex flex-col gap-3 border-r px-6 py-5 last:border-r-0;
   }
+  .health-strip > button {
+    @apply flex min-w-0 flex-col items-start gap-3 border-r border-b-0 bg-transparent px-6 py-5 text-left last:border-r-0 hover:bg-muted/50 aria-pressed:bg-accent aria-pressed:text-accent-foreground focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring;
+  }
   .health-strip span {
     @apply text-xs text-muted-foreground;
   }
@@ -338,6 +341,16 @@
   }
   .batch-config-fields {
     @apply min-w-0;
+  }
+  .batch-config-options {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .batch-address-sample {
+    @apply flex min-w-0 flex-col gap-2 rounded-md border bg-muted/30 p-3;
+  }
+  .batch-address-sample code {
+    @apply break-all font-mono text-xs leading-5 text-foreground;
   }
   .batch-side-summary,
   .batch-preview-summary {
@@ -394,6 +407,31 @@
   }
   .batch-preview-summary {
     @apply h-fit;
+  }
+  .provider-source-filters {
+    @apply flex flex-nowrap items-center gap-2 overflow-x-auto pb-1;
+    scrollbar-width: none;
+  }
+  .provider-source-filters::-webkit-scrollbar {
+    display: none;
+  }
+  .provider-source-filters > button {
+    @apply shrink-0 whitespace-nowrap;
+  }
+  .provider-source-group {
+    @apply flex shrink-0 flex-nowrap items-center gap-1.5 border-l pl-2;
+  }
+  .provider-source-label {
+    @apply mr-0.5 shrink-0 whitespace-nowrap text-xs text-muted-foreground;
+  }
+  .provider-source-group button {
+    @apply shrink-0 whitespace-nowrap;
+  }
+  .provider-account-table {
+    display: none;
+  }
+  .outlook-account-table {
+    overflow-x: auto;
   }
   .batch-preview-count {
     @apply flex items-baseline gap-2;
@@ -738,6 +776,30 @@
     grid-template-columns: minmax(130px, 1fr) minmax(160px, 2fr) auto;
   }
 }
+@media (min-width: 768px) {
+  .batch-config-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .batch-address-sample {
+    grid-column: 1 / -1;
+  }
+  .provider-account-panel[data-account-layout="compact"]
+    .provider-account-cards {
+    display: none;
+  }
+  .provider-account-panel[data-account-layout="compact"]
+    .provider-account-table {
+    display: block;
+  }
+}
+@media (min-width: 768px) and (max-width: 1100px) {
+  .outlook-account-panel[data-density="compact"] .outlook-account-table {
+    display: block;
+  }
+  .outlook-account-panel[data-density="compact"] .mobile-records {
+    display: none;
+  }
+}
 @media (max-width: 767px) {
   .global-search-trigger {
     width: 36px;
@@ -768,6 +830,16 @@
   }
   .health-strip > div:nth-child(3) {
     border-right: 0;
+  }
+  .health-strip > button:nth-child(3) {
+    border-right: 0;
+  }
+  .health-strip > button {
+    gap: 10px;
+    padding: 14px 10px;
+  }
+  .health-strip > button:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
   }
   .health-strip > div:nth-child(n + 4) {
     border-top: 1px solid var(--border);

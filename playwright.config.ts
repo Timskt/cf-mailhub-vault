@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const e2ePort = process.env.MAILHUB_E2E_PORT || "8789";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
@@ -16,13 +18,13 @@ export default defineConfig({
   use: {
     ...devices["Desktop Chrome"],
     channel: process.env.PLAYWRIGHT_CHANNEL,
-    baseURL: "http://127.0.0.1:8789",
+    baseURL: `http://127.0.0.1:${e2ePort}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: {
     command: "node scripts/start-e2e.mjs",
-    url: "http://127.0.0.1:8789/healthz",
+    url: `http://127.0.0.1:${e2ePort}/healthz`,
     reuseExistingServer: false,
     timeout: 120000,
   },

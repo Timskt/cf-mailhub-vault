@@ -576,6 +576,20 @@ test("large provider pools paginate densely and MailSlurp uses an API key for an
     animations: "disabled",
     path: info.outputPath("provider-accounts-compact-desktop.png"),
   });
+  await page.getByRole("tab", { name: "舒展", exact: true }).click();
+  await expect(table).toBeHidden();
+  await expect(
+    page.getByRole("article", {
+      name: "外部邮箱 member-001@fixture.test",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("tab", { name: "舒展", exact: true }),
+  ).toHaveAttribute("data-state", "active");
+  await page.getByRole("tab", { name: "紧凑", exact: true }).click();
+  await expect(table).toBeVisible();
   await page.getByRole("checkbox", { name: "选择全部当前页" }).click();
   await expect(
     page.getByText("已选择 30 个账号（本页 30 个）", { exact: true }),
@@ -616,13 +630,14 @@ test("large provider pools paginate densely and MailSlurp uses an API key for an
   await expect(table).toBeVisible();
 
   await page.setViewportSize({ width: 1024, height: 900 });
-  await expect(table).toBeHidden();
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("row")).toHaveCount(46);
   await expect(
     page.getByRole("article", {
       name: "外部邮箱 member-001@fixture.test",
       exact: true,
     }),
-  ).toBeVisible();
+  ).toBeHidden();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth + 1,
@@ -637,6 +652,12 @@ test("large provider pools paginate densely and MailSlurp uses an API key for an
       exact: true,
     }),
   ).toBeVisible();
+  const sourceFilters = page.locator(".provider-source-filters");
+  const filterBounds = await sourceFilters.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(filterBounds.scrollWidth).toBeGreaterThan(filterBounds.clientWidth);
   await page.screenshot({
     animations: "disabled",
     path: info.outputPath("provider-accounts-compact-mobile.png"),
