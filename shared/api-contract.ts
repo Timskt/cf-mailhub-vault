@@ -88,6 +88,7 @@ const paged = (data: Schema): Schema =>
       page: n(1),
       limit: n(1, 100),
       total: n(),
+      has_more: bool,
       summary: obj({}),
     },
     ["success", "data", "page", "limit", "total"],
@@ -100,7 +101,10 @@ const sources = strEnum(
   "external",
   "mailtm",
   "mailgw",
+  "mailslurp",
+  "mailinator",
 );
+const providerDomainId = strEnum("mailtm", "mailgw", "mailslurp", "mailinator");
 const statuses = strEnum("active", "pending", "banned", "deprecated");
 const categories = strEnum(
   "general",
@@ -113,7 +117,14 @@ const targetProperties = {
   email: address,
   vault_id: id,
   platform: s(100),
-  source: strEnum("cf_domain", "outlook", "mailtm", "mailgw"),
+  source: strEnum(
+    "cf_domain",
+    "outlook",
+    "mailtm",
+    "mailgw",
+    "mailslurp",
+    "mailinator",
+  ),
 };
 const targetRules = [
   obj({ ...targetProperties, vault_id: { not: {} }, platform: { not: {} } }, [
@@ -761,7 +772,7 @@ export const schemas: Record<string, Schema> = {
       id: {
         ...s(264),
         pattern:
-          "^(cf_domain|outlook|gptmail|external|mailtm|mailgw):[^\\s@]+@[^\\s@]+$",
+          "^(cf_domain|outlook|gptmail|external|mailtm|mailgw|mailslurp|mailinator):[^\\s@]+@[^\\s@]+$",
         description:
           "source:address，地址规范化为小写；在路径中须对整个 ID 做 URL 编码。",
       },
@@ -1640,17 +1651,20 @@ function op(
           ? "记录 ID"
           : `${match[1]}，作为路径段时 URL 编码`,
       schema:
-        match[1] === "id"
-          ? path.startsWith("/api/mailbox-identities/")
-            ? (schemas.MailboxIdentity.properties as Record<string, Schema>).id
-            : path.startsWith("/api/api-keys")
-              ? uuid
-              : path.includes("/deliveries/")
-                ? hash
-                : path.includes("storage")
-                  ? s()
-                  : id
-          : s(),
+        match[1] === "provider" && path.startsWith("/api/providers/")
+          ? providerDomainId
+          : match[1] === "id"
+            ? path.startsWith("/api/mailbox-identities/")
+              ? (schemas.MailboxIdentity.properties as Record<string, Schema>)
+                  .id
+              : path.startsWith("/api/api-keys")
+                ? uuid
+                : path.includes("/deliveries/")
+                  ? hash
+                  : path.includes("storage")
+                    ? s()
+                    : id
+            : s(),
       ...(path.startsWith("/api/mailbox-identities/")
         ? { example: "mailtm:user+alias@example.com" }
         : {}),
@@ -1805,7 +1819,14 @@ op("get", "/api/external/code", "lookupCodeLegacy", "兼容取码接口", "自�
   parameters: [
     q(
       "source",
-      strEnum("cf_domain", "outlook", "mailtm", "mailgw"),
+      strEnum(
+        "cf_domain",
+        "outlook",
+        "mailtm",
+        "mailgw",
+        "mailslurp",
+        "mailinator",
+      ),
       "仅用于明确 email 目标，消除同地址多个来源的歧义",
     ),
     q(
@@ -3931,7 +3952,7 @@ op(
   },
 );
 
-const provider = strEnum("mailtm", "mailgw");
+const provider = strEnum("mailtm", "mailgw", "mailslurp", "mailinator");
 const providerAccount = obj(
   {
     id,
@@ -3991,11 +4012,24 @@ op(
             name: s(),
             url: s(),
             docs: s(),
+            credential_label: s(),
+            description: s(),
+            integration_hint: s(),
+            can_create: bool,
             account_count: n(),
             attention_count: n(),
             capabilities: arr(s()),
           },
-          ["id", "name", "account_count", "attention_count"],
+          [
+            "id",
+            "name",
+            "credential_label",
+            "description",
+            "integration_hint",
+            "can_create",
+            "account_count",
+            "attention_count",
+          ],
         ),
       ),
     ),
@@ -4009,7 +4043,7 @@ op(
   "外部邮箱",
   {
     description:
-      "provider 仅支持 mailtm/mailgw。固定访问官方端点，返回该页活动且公开的域名。每页最多 30 条，total 为服务商原始域名总数（可能含被过滤项）。不自动创建账号。",
+      "固定访问服务商官方端点。Mail.tm / Mail.gw 返回当前页活动公开域名，可创建邮箱；MailSlurp 与 Mailinator Private 不提供可创建邮箱的域名列表，调用会返回 PROVIDER_CAPABILITY_UNSUPPORTED，只能接入已有 Inbox。Mailinator 会验证邮箱域名属于该团队的私有域。",
     parameters: [q("page", n(1, 1000), "服务商页码")],
     response: paged(obj({ domain: s(253) }, ["domain"])),
   },
@@ -4040,14 +4074,19 @@ op(
   "外部邮箱",
   {
     description:
-      "mode=connect（默认）使用邮箱和密码登录并校验 /me 身份；mode=create 先保存本地凭据，再调用官方创建接口。创建失败时本地账号保留且响应 data.id 可用于修复；网络超时后先测试连接，切勿换键自动重建。登录成功不等于收件验证成功，新账号为 unchecked。推荐使用 Idempotency-Key。",
+      "Mail.tm/Mail.gw 使用邮箱密码；MailSlurp 使用 API Key 并按地址查找已创建的 Inbox。mode=connect（默认）会核验服务商身份；mode=create 仅适用于支持创建的服务商，会先保存本地凭据再调用官方创建接口。创建失败时本地账号保留且响应 data.id 可用于修复；网络超时后先测试连接，切勿自动重建。登录成功不等于收件验证成功，新账号为 unchecked。推荐使用 Idempotency-Key。",
     effects:
       "创建本地账号，create 模式还会在服务商创建邮箱。密码与令牌纳入凭据加密和便携业务备份。",
     body: obj(
       {
         provider,
         address,
-        password: { ...s(1000), minLength: 1 },
+        password: {
+          ...s(1000),
+          minLength: 1,
+          description:
+            "Mail.tm/Mail.gw 邮箱密码；MailSlurp API Key。MailSlurp 的 Inbox 必须预先在服务商账户中创建。",
+        },
         mode: strEnum("connect", "create"),
         remark: s(1000),
       },
@@ -4141,6 +4180,8 @@ op(
   {
     parameters: [q("page", n(1, 100000), "页码，每页最多 30 封")],
     response: paged(providerMessage),
+    description:
+      "Mailinator Private 不提供精确总数；仍有下一页时返回 has_more=true，total 是已确认邮件数的下界，最后一页返回精确 total。",
     effects: "读取服务商邮件；自动重登及连接健康状态会保存。不会标记已读。",
   },
 );

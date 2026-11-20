@@ -263,7 +263,9 @@ function policy(method: string, path: string): Policy | null {
       id: Number(providerAccount[1]),
     };
   if (
-    /^\/api\/providers(?:\/accounts|\/(?:mailtm|mailgw)\/domains)?$/.test(path)
+    /^\/api\/providers(?:\/accounts|\/(?:mailtm|mailgw|mailslurp|mailinator)\/domains)?$/.test(
+      path,
+    )
   )
     return { scopes: [read ? "admin" : "mailbox:write"], collection: true };
   let match = path.match(

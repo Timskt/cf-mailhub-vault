@@ -12,6 +12,7 @@ import {
   ActionError,
   Blank,
   BusyButton,
+  CopyAction,
   CopyButton,
   ErrorState,
   Loading,
@@ -43,6 +44,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   api,
   date,
+  download,
   query,
   useAction,
   useDebounce,
@@ -57,10 +59,12 @@ import {
   Clock3,
   Infinity,
   KeyRound,
+  List,
   Link,
   Mail as MailIcon,
   Pin,
   Plus,
+  Rows3,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
@@ -517,7 +521,12 @@ export function MailboxesPage() {
   const [q, setQ] = useState("");
   const [domain, setDomain] = useState("");
   const [status, setStatus] = useState("all");
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(1),
+    [limit, setLimit] = useState(30),
+    [density, setDensity] = useState<"comfortable" | "compact">("compact");
+  const [selectedMailboxes, setSelectedMailboxes] = useState<
+    Record<number, Mailbox>
+  >({});
   const [create, setCreate] = useState(false);
   const [batchCreate, setBatchCreate] = useState(false);
   const [purpose, setPurpose] = useState<Mailbox | null>(null);
@@ -529,7 +538,7 @@ export function MailboxesPage() {
   const search = useDebounce(q);
   const action = useAction();
   const rows = useResource<Mailbox[]>(
-    `/api/mailboxes?${query({ q: search, domain, status, page })}`,
+    `/api/mailboxes?${query({ q: search, domain, status, page, limit })}`,
     w.revision,
   );
   const active = useResource<Mailbox>(
@@ -552,6 +561,34 @@ export function MailboxesPage() {
     ? Math.max(0, Math.ceil((Date.parse(box.expires_at) - now) / 1000))
     : 0;
   const canReceive = !!box && (!!box.is_permanent || remaining > 0);
+  const pageRows = rows.result?.data || [];
+  const selectedOnPage = pageRows.filter((mailbox) =>
+    Object.hasOwn(selectedMailboxes, mailbox.id),
+  ).length;
+  const pageSelection =
+    selectedOnPage === 0
+      ? false
+      : selectedOnPage === pageRows.length
+        ? true
+        : "indeterminate";
+  const toggleMailbox = (mailbox: Mailbox, checked: boolean) => {
+    setSelectedMailboxes((current) => {
+      const next = { ...current };
+      if (checked) next[mailbox.id] = mailbox;
+      else delete next[mailbox.id];
+      return next;
+    });
+  };
+  const togglePageMailboxes = (checked: boolean) => {
+    setSelectedMailboxes((current) => {
+      const next = { ...current };
+      for (const mailbox of pageRows) {
+        if (checked) next[mailbox.id] = mailbox;
+        else delete next[mailbox.id];
+      }
+      return next;
+    });
+  };
   useEffect(() => {
     if (!canReceive) inbox.stop();
   }, [canReceive, inbox.stop]);
@@ -692,7 +729,7 @@ export function MailboxesPage() {
       {active.error && (
         <ErrorState message={active.error} retry={active.reload} />
       )}
-      <div className="data-panel">
+      <div className="data-panel" data-density={density}>
         <div className="filter-bar">
           <SearchBox
             value={q}
@@ -716,6 +753,36 @@ export function MailboxesPage() {
               ),
             ]}
           />
+          <Pick
+            label="每页邮箱数"
+            value={String(limit)}
+            onChange={(value) => {
+              setLimit(Number(value));
+              setPage(1);
+            }}
+            options={[
+              ["30", "每页 30 个"],
+              ["50", "每页 50 个"],
+              ["100", "每页 100 个"],
+            ]}
+          />
+          <Tabs
+            value={density}
+            onValueChange={(value) =>
+              setDensity(value as "comfortable" | "compact")
+            }
+          >
+            <TabsList aria-label="邮箱列表密度">
+              <TabsTrigger value="comfortable" title="卡片视图">
+                <List data-icon="inline-start" />
+                卡片
+              </TabsTrigger>
+              <TabsTrigger value="compact" title="表格视图，适合大量邮箱">
+                <Rows3 data-icon="inline-start" />
+                表格
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <RefreshButton onClick={rows.reload} busy={rows.loading} />
         </div>
         <Tabs
@@ -755,10 +822,73 @@ export function MailboxesPage() {
           </Blank>
         ) : (
           <>
+            {Object.keys(selectedMailboxes).length > 0 && (
+              <div className="selection-bar mailbox-selection-bar">
+                <strong>{Object.keys(selectedMailboxes).length} 个已选</strong>
+                <span className="text-muted-foreground">可跨页保留选择</span>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <CopyAction
+                    label="复制所选邮箱"
+                    value={Object.values(selectedMailboxes)
+                      .map((mailbox) => mailbox.address)
+                      .join("\n")}
+                    size="sm"
+                    variant="outline"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      download(
+                        Object.values(selectedMailboxes).map(
+                          ({
+                            address,
+                            domain,
+                            remark,
+                            is_permanent,
+                            expires_at,
+                            created_at,
+                          }) => ({
+                            address,
+                            domain,
+                            remark,
+                            is_permanent: Boolean(is_permanent),
+                            expires_at,
+                            created_at,
+                          }),
+                        ),
+                        "selected-mailboxes.json",
+                      )
+                    }
+                  >
+                    导出所选
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedMailboxes({})}
+                  >
+                    清空选择
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="desktop-table">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10 pl-3">
+                      <Checkbox
+                        aria-label="选择本页全部邮箱"
+                        checked={pageSelection}
+                        disabled={!pageRows.length}
+                        onCheckedChange={(value) =>
+                          togglePageMailboxes(value === true)
+                        }
+                      />
+                    </TableHead>
                     <TableHead>收件地址</TableHead>
                     <TableHead>有效期</TableHead>
                     <TableHead>关联平台</TableHead>
@@ -771,6 +901,15 @@ export function MailboxesPage() {
                 <TableBody>
                   {rows.result.data.map((m) => (
                     <TableRow key={m.id}>
+                      <TableCell className="w-10 pl-3">
+                        <Checkbox
+                          aria-label={`选择邮箱 ${m.address}`}
+                          checked={Object.hasOwn(selectedMailboxes, m.id)}
+                          onCheckedChange={(value) =>
+                            toggleMailbox(m, value === true)
+                          }
+                        />
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <button
@@ -849,14 +988,27 @@ export function MailboxesPage() {
             </div>
             <div className="mobile-records">
               {rows.result.data.map((m) => (
-                <article className="mobile-record" key={m.id}>
+                <article
+                  className="mobile-record"
+                  key={m.id}
+                  aria-label={`临时邮箱 ${m.address}`}
+                >
                   <div className="flex items-start justify-between gap-2">
-                    <button
-                      className="row-link break-all"
-                      onClick={() => setSelected(m.id)}
-                    >
-                      {m.address}
-                    </button>
+                    <div className="flex min-w-0 items-start gap-2">
+                      <Checkbox
+                        aria-label={`选择邮箱 ${m.address}`}
+                        checked={Object.hasOwn(selectedMailboxes, m.id)}
+                        onCheckedChange={(value) =>
+                          toggleMailbox(m, value === true)
+                        }
+                      />
+                      <button
+                        className="row-link break-all text-left"
+                        onClick={() => setSelected(m.id)}
+                      >
+                        {m.address}
+                      </button>
+                    </div>
                     <Menu items={items(m)} />
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">

@@ -771,6 +771,8 @@ function MailboxDiagnostic({ onOpen }: { onOpen: () => void }) {
                   ["cf_domain", "自建域名"],
                   ["mailtm", "Mail.tm"],
                   ["mailgw", "Mail.gw"],
+                  ["mailslurp", "MailSlurp"],
+                  ["mailinator", "Mailinator Private"],
                 ]}
               />
               <ActionError message={action.error} />

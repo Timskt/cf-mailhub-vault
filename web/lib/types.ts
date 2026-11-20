@@ -5,6 +5,7 @@ export interface Reply<T> {
   total?: number;
   page?: number;
   limit?: number;
+  has_more?: boolean;
   summary?: Record<string, number>;
   next_cursor?: string;
   url?: string;

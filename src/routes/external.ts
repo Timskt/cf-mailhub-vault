@@ -17,6 +17,8 @@ app.get("/code", async (c) => {
         "outlook",
         "mailtm",
         "mailgw",
+        "mailslurp",
+        "mailinator",
       ])
     : "";
   if (source && !address) invalid("source 只用于明确的 email 目标");

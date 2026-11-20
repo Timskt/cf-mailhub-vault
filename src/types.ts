@@ -34,7 +34,14 @@ export interface PlatformAccount {
   platform_url: string;
   account_email: string;
   email_source:
-    "cf_domain" | "outlook" | "gptmail" | "external" | "mailtm" | "mailgw";
+    | "cf_domain"
+    | "outlook"
+    | "gptmail"
+    | "external"
+    | "mailtm"
+    | "mailgw"
+    | "mailslurp"
+    | "mailinator";
   username: string;
   password: string;
   totp_secret: string;

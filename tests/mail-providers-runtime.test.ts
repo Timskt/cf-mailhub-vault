@@ -100,3 +100,87 @@ test("provider transport runs in Workers and never follows credential redirects"
     await runtime.dispose();
   }
 });
+
+test("Mailinator Worker transport verifies a private domain without exposing its token in the URL", async () => {
+  const bundle = await build({
+    stdin: {
+      contents: `
+        import { providerLogin } from './src/mail-providers';
+        export default {
+          async fetch() {
+            const calls = [];
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = async (input, init) => {
+              const upstream = new Request(input, init);
+              const url = new URL(upstream.url);
+              calls.push({
+                host: url.hostname,
+                path: url.pathname,
+                query: url.search,
+                authorization: upstream.headers.get('authorization'),
+                redirect: upstream.redirect,
+              });
+              if (url.pathname === '/api/v2/domains')
+                return Response.json({
+                  domains: [{ name: 'private.example', verified: true }]
+                });
+              if (url.pathname === '/api/v2/domains/private.example/inboxes/owned')
+                return Response.json({
+                  domain: 'private.example', to: 'owned', msgs: []
+                });
+              throw new Error('Unexpected Mailinator route: ' + url.pathname);
+            };
+            try {
+              const data = await providerLogin(
+                'mailinator', 'owned@private.example', 'fictional-team-token'
+              );
+              return Response.json({ data, calls });
+            } finally { globalThis.fetch = originalFetch; }
+          }
+        };
+      `,
+      resolveDir: process.cwd(),
+      sourcefile: "mailinator-runtime-entry.ts",
+    },
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: "es2022",
+    write: false,
+  });
+  const runtime = new Miniflare({
+    workers: [
+      {
+        config: {
+          name: "mailinator-runtime-test",
+          compatibilityDate: "2026-11-01",
+          manifest: {
+            mainModule: "index.js",
+            modules: {
+              "index.js": { type: "esm", contents: bundle.outputFiles[0].text },
+            },
+          },
+        },
+      },
+    ],
+  });
+  try {
+    const worker = await runtime.getWorker();
+    const result = (await (
+      await worker.fetch("https://mailhub.test/")
+    ).json()) as any;
+    assert.equal(result.data.remote_id, "private.example");
+    assert.equal(result.calls.length, 2);
+    assert.ok(
+      result.calls.every(
+        (call: any) =>
+          call.host === "api.mailinator.com" &&
+          call.authorization === "fictional-team-token" &&
+          !call.query.includes("token="),
+      ),
+    );
+    assert.ok(result.calls.every((call: any) => call.redirect === "manual"));
+  } finally {
+    await runtime.dispose();
+  }
+});

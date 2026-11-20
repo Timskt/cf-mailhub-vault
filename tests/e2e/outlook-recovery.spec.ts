@@ -45,6 +45,86 @@ async function fits(page: Page) {
   }
 }
 
+test("Outlook account selection persists across pages and page size can increase", async ({
+  page,
+}) => {
+  const accounts = Array.from({ length: 45 }, (_, index) => ({
+    id: index + 1,
+    email: `member-${String(index + 1).padStart(3, "0")}@outlook.test`,
+    password: "",
+    client_id: "",
+    refresh_token: "",
+    status: "active",
+    auth_status: "healthy",
+    token_refresh_status: "idle",
+    group_id: 1,
+    group_name: "默认分组",
+    tags: [],
+    platform_count: 0,
+    remark: "",
+    last_error: "",
+    last_checked_at: "2026-11-20T10:00:00.000Z",
+    last_token_refresh_at: "",
+    next_token_refresh_at: "",
+    token_refresh_error: "",
+    created_at: "2026-11-20T10:00:00.000Z",
+    updated_at: "2026-11-20T10:00:00.000Z",
+  }));
+  await page.route("**/api/outlook/accounts?**", async (route) => {
+    const url = new URL(route.request().url());
+    const pageNumber = Number(url.searchParams.get("page") || 1);
+    const limit = Number(url.searchParams.get("limit") || 30);
+    if (url.searchParams.get("attention") === "true")
+      return route.fulfill({
+        json: {
+          success: true,
+          data: [],
+          total: 0,
+          page: 1,
+          limit,
+        },
+      });
+    return route.fulfill({
+      json: {
+        success: true,
+        data: accounts.slice((pageNumber - 1) * limit, pageNumber * limit),
+        total: accounts.length,
+        page: pageNumber,
+        limit,
+        summary: {
+          total: 45,
+          healthy: 45,
+          attention: 0,
+          unchecked: 0,
+          disabled: 0,
+        },
+      },
+    });
+  });
+  await login(page);
+  const table = page.getByRole("table").first();
+  await expect(table.getByRole("row")).toHaveCount(31);
+  await page.getByRole("checkbox", { name: "选择本页全部账号" }).click();
+  await expect(
+    page.getByText("已选 30 个 · 本页 30 个", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(table.getByRole("row")).toHaveCount(16);
+  await expect(
+    page.getByText("已选 30 个 · 本页 0 个", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("checkbox", { name: "选择本页全部账号" }).click();
+  await expect(
+    page.getByText("已选 45 个 · 本页 15 个", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("combobox", { name: "每页条数" }).click();
+  await page.getByRole("option", { name: "每页 50 条", exact: true }).click();
+  await expect(table.getByRole("row")).toHaveCount(46);
+  await expect(
+    page.getByText("已选 45 个 · 本页 15 个", { exact: true }),
+  ).toHaveCount(0);
+});
+
 test("repair panel, state-bound code extraction, explicit exchange and nested config export work on mobile", async ({
   page,
   context,

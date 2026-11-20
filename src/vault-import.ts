@@ -7,6 +7,8 @@ export const vaultSources = [
   "gptmail",
   "mailtm",
   "mailgw",
+  "mailslurp",
+  "mailinator",
   "external",
 ] as const;
 export const vaultStatuses = [

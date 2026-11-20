@@ -5,6 +5,8 @@ export const mailboxSources: [string, string][] = [
   ["outlook", "Outlook"],
   ["mailtm", "Mail.tm"],
   ["mailgw", "Mail.gw"],
+  ["mailslurp", "MailSlurp"],
+  ["mailinator", "Mailinator Private"],
   ["external", "外部邮箱"],
   ["gptmail", "GPTMail（手动查收）"],
 ];

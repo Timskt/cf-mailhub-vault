@@ -2,7 +2,13 @@
 export type Target =
   | {
       email: string;
-      source?: "cf_domain" | "outlook" | "mailtm" | "mailgw";
+      source?:
+        | "cf_domain"
+        | "outlook"
+        | "mailtm"
+        | "mailgw"
+        | "mailslurp"
+        | "mailinator";
       vault_id?: never;
       platform?: never;
     }
@@ -20,7 +26,14 @@ export type VerificationRequest = (
 export interface Verification {
   email: string;
   source:
-    "cf_domain" | "outlook" | "mailtm" | "mailgw" | "gptmail" | "external";
+    | "cf_domain"
+    | "outlook"
+    | "mailtm"
+    | "mailgw"
+    | "mailslurp"
+    | "mailinator"
+    | "gptmail"
+    | "external";
   vault_id?: number;
   outcome: "found" | "empty";
   has_mail: boolean;

@@ -348,16 +348,18 @@ export function Modal({
   children,
   close,
   wide = false,
+  className,
 }: {
   title: string;
   description?: string;
   children: ReactNode;
   close: () => void;
   wide?: boolean;
+  className?: string;
 }) {
   return (
     <Dialog open onOpenChange={(open) => !open && close()}>
-      <DialogContent className={wide ? "max-w-3xl" : undefined}>
+      <DialogContent className={cn(wide && "max-w-3xl", className)}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
@@ -455,15 +457,20 @@ export function Pager({
     Math.ceil((result?.total || 0) / (result?.limit || 30)),
   );
   useEffect(() => {
-    if (result && page > pages) setPage(pages);
+    if (result && !result.has_more && page > pages) setPage(pages);
   }, [result, page, pages, setPage]);
   if (!result) return null;
   return (
     <div className="pager">
-      <span>共 {result.total || 0} 条记录</span>
+      <span>
+        {result.has_more
+          ? `至少 ${result.total || 0} 条记录`
+          : `共 ${result.total || 0} 条记录`}
+      </span>
       <div className="flex items-center gap-3">
         <span>
           {page} / {pages}
+          {result.has_more ? "+" : ""}
         </span>
         <IconButton
           label="上一页"
@@ -474,7 +481,9 @@ export function Pager({
         </IconButton>
         <IconButton
           label="下一页"
-          disabled={page >= pages}
+          disabled={
+            result.has_more === undefined ? page >= pages : !result.has_more
+          }
           onClick={() => setPage(page + 1)}
         >
           <ArrowRight />
@@ -483,7 +492,7 @@ export function Pager({
     </div>
   );
 }
-type PickReply = Pick<Reply<unknown>, "total" | "limit">;
+type PickReply = Pick<Reply<unknown>, "total" | "limit" | "has_more">;
 export function RefreshButton({
   onClick,
   busy,

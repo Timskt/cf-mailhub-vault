@@ -74,7 +74,7 @@ import {
   Upload,
   Wrench,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   accountTextColumns,
@@ -219,6 +219,7 @@ export default function OutlookPage({
   );
   const [q, setQ] = useState(initialQuery);
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(30);
   const [group, setGroup] = useState("");
   const [tag, setTag] = useState("");
   const [status, setStatus] = useState("");
@@ -248,7 +249,7 @@ export default function OutlookPage({
   };
   const exportQuery = query(accountFilters);
   const rows = useResource<Outlook[]>(
-    `/api/outlook/accounts?${query({ ...accountFilters, page })}`,
+    `/api/outlook/accounts?${query({ ...accountFilters, page, limit })}`,
     w.revision,
     { keepPreviousData: true },
   );
@@ -261,14 +262,12 @@ export default function OutlookPage({
     setPage(1);
     setSelected([]);
   };
-  useEffect(() => {
-    if (!rows.result) return;
-    const visible = new Set(rows.result.data.map((a) => a.id));
-    setSelected((ids) => {
-      const remaining = ids.filter((id) => visible.has(id));
-      return remaining.length === ids.length ? ids : remaining;
-    });
-  }, [rows.result]);
+  const visibleIds = rows.result?.data.map((account) => account.id) || [];
+  const selectedVisibleCount = visibleIds.filter((id) =>
+    selected.includes(id),
+  ).length;
+  const allVisibleSelected =
+    visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
   const connect = (sendMail = false) =>
     w.repairOutlook({
       group_id: Number(group) || 1,
@@ -391,11 +390,20 @@ export default function OutlookPage({
       checked={selected.includes(a.id)}
       onCheckedChange={(v) =>
         setSelected((ids) =>
-          v ? [...ids, a.id] : ids.filter((id) => id !== a.id),
+          v ? [...new Set([...ids, a.id])] : ids.filter((id) => id !== a.id),
         )
       }
     />
   );
+  const toggleVisible = (checked: boolean) =>
+    setSelected((ids) => {
+      const next = new Set(ids);
+      for (const id of visibleIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return [...next];
+    });
   return (
     <>
       <PageHeader
@@ -537,6 +545,20 @@ export default function OutlookPage({
               ["disabled", "已停用"],
             ]}
           />
+          <Pick
+            label="每页条数"
+            value={String(limit)}
+            onChange={(value) => {
+              setLimit(Number(value));
+              setPage(1);
+              setSelected([]);
+            }}
+            options={[
+              ["30", "每页 30 条"],
+              ["50", "每页 50 条"],
+              ["100", "每页 100 条"],
+            ]}
+          />
           <RefreshButton onClick={rows.reload} busy={rows.loading} />
           <Menu
             label="Outlook 管理"
@@ -556,7 +578,9 @@ export default function OutlookPage({
         </div>
         {selected.length > 0 && (
           <div className="selection-bar">
-            <span>已选 {selected.length} 个</span>
+            <span>
+              已选 {selected.length} 个 · 本页 {selectedVisibleCount} 个
+            </span>
             <BusyButton
               size="sm"
               variant="outline"
@@ -616,6 +640,9 @@ export default function OutlookPage({
                 },
               ]}
             />
+            <Button size="sm" variant="ghost" onClick={() => setSelected([])}>
+              清除选择
+            </Button>
           </div>
         )}
         {rows.error ? (
@@ -650,17 +677,13 @@ export default function OutlookPage({
                       <Checkbox
                         aria-label="选择本页全部账号"
                         checked={
-                          selected.length === rows.result.data.length
+                          allVisibleSelected
                             ? true
-                            : selected.length
+                            : selectedVisibleCount
                               ? "indeterminate"
                               : false
                         }
-                        onCheckedChange={(v) =>
-                          setSelected(
-                            v ? rows.result!.data.map((a) => a.id) : [],
-                          )
-                        }
+                        onCheckedChange={(v) => toggleVisible(v === true)}
                       />
                     </TableHead>
                     <TableHead>邮箱账号</TableHead>
@@ -839,14 +862,7 @@ export default function OutlookPage({
             </div>
           </>
         )}
-        <Pager
-          result={rows.result}
-          page={page}
-          setPage={(p) => {
-            setPage(p);
-            setSelected([]);
-          }}
-        />
+        <Pager result={rows.result} page={page} setPage={setPage} />
       </div>
       <RenewalPanel />
       <p className="page-footnote">

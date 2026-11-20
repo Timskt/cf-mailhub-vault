@@ -73,12 +73,12 @@ class SDKTests(unittest.TestCase):
             calls.append(json.loads(request.data))
             return response({"success": True, "data": EMPTY})
         sdk = self.sdk(transport)
-        for source in ("mailtm", "mailgw"):
+        for source in ("mailtm", "mailgw", "mailslurp", "mailinator"):
             sdk.lookup_verification({"email": "owned@provider.test", "source": source})
             self.assertEqual(calls[-1]["source"], source)
         with self.assertRaises(Exception):
             sdk.lookup_verification({"email": "owned@provider.test", "source": "unknown"})
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)
 
     def test_errors_and_writes_never_retry(self):
         calls = []

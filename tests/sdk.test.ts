@@ -609,7 +609,12 @@ test("provider verification targets preserve supported sources and reject unknow
     calls.push(init);
     return json({ success: true, data: { source: "mailtm" } });
   });
-  for (const source of ["mailtm", "mailgw"] as const) {
+  for (const source of [
+    "mailtm",
+    "mailgw",
+    "mailslurp",
+    "mailinator",
+  ] as const) {
     await sdk.lookupVerification({ email: "owned@provider.test", source });
     assert.equal(JSON.parse(String(calls.at(-1)!.body)).source, source);
   }
@@ -619,5 +624,5 @@ test("provider verification targets preserve supported sources and reject unknow
       source: "unknown",
     } as any),
   );
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
 });

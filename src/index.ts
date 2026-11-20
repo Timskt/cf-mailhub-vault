@@ -53,12 +53,22 @@ app.onError((error, c) => {
       { success: false, error: error.code, message: error.message },
       403,
     );
-  if (error instanceof StorageError)
+  if (error instanceof StorageError) {
+    const retryAfter =
+      "retry_after" in error && typeof error.retry_after === "number"
+        ? error.retry_after
+        : undefined;
     return c.json(
-      { success: false, error: error.code, message: error.message },
+      {
+        success: false,
+        error: error.code,
+        message: error.message,
+        ...(retryAfter ? { retry_after: retryAfter } : {}),
+      },
       error.status as 400,
-      { "Retry-After": "5" },
+      { "Retry-After": String(retryAfter || 5) },
     );
+  }
   if (error instanceof HTTPException)
     return c.json(
       { success: false, error: "INVALID_REQUEST", message: error.message },

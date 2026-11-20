@@ -117,6 +117,8 @@ export function parseTarget(input: unknown) {
             "outlook",
             "mailtm",
             "mailgw",
+            "mailslurp",
+            "mailinator",
           ]),
   };
 }

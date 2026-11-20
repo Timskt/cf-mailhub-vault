@@ -32,7 +32,7 @@ workspace----account_identifier----login_methods----mailbox_address----mailbox_l
 
 也可以填写「默认平台」，粘贴 `邮箱----密码----用户名`。带表头时支持英文列名及界面列出的中文别名，如「平台、邮箱、密码、用户名、来源、分类、状态、官网、2FA密钥、节点、备注、置顶、工作区、账号标识、登录方式、收件邮箱、邮箱关联状态」。无表头允许省略末尾字段；有表头时每行列数必须一致，重复表头会被拒绝。
 
-- 来源：`cf_domain`、`outlook`、`mailtm`、`mailgw`、`gptmail`、`external`；文本未填时微软邮箱推断为 Outlook，其他为 external。API 的 `accounts[]` 入口省略来源时默认为 `cf_domain`。
+- 来源：`cf_domain`、`outlook`、`mailtm`、`mailgw`、`mailslurp`、`mailinator`、`gptmail`、`external`；文本未填时微软邮箱推断为 Outlook，其他为 external。API 的 `accounts[]` 入口省略来源时默认为 `cf_domain`。
 - 状态：`active`、`pending`、`banned`、`deprecated`，默认 active。它表示登记状态，邮箱连接是否正常另行检查。
 - 工作区和账号标识分别使用 `workspace`、`account_identifier`；`login_methods` 使用 JSON 数组字符串，例如 `["google","password"]`。支持 password/google/microsoft/sso/magic_link/passkey/unknown，去重并排序；省略或为空时默认为 `["unknown"]`。
 - `account_email` 是平台登录邮箱；`mailbox_address` 是实际收件地址，空值回退账号邮箱，别名须明确登记。`mailbox_link_state` 为 auto/detached，省略或空值取 auto；detached 停止此平台注册自动查收，仍保留台账和现有邮件保留保护。

@@ -105,10 +105,17 @@ function target(value: Target) {
   if (
     value.source !== undefined &&
     (value.email === undefined ||
-      !["outlook", "cf_domain", "mailtm", "mailgw"].includes(value.source))
+      ![
+        "outlook",
+        "cf_domain",
+        "mailtm",
+        "mailgw",
+        "mailslurp",
+        "mailinator",
+      ].includes(value.source))
   )
     invalid(
-      "source requires an email target and must be outlook, cf_domain, mailtm or mailgw",
+      "source requires an email target and must be outlook, cf_domain, mailtm, mailgw, mailslurp or mailinator",
     );
 }
 function verificationInput(value: VerificationRequest) {

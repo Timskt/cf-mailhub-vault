@@ -43,11 +43,19 @@ const app = new Hono<{ Bindings: Env }>();
 // An upstream auth failure does not invalidate the administrator's session.
 app.use("*", async (c, next) => {
   await next();
-  if (c.error instanceof ProviderError && c.error.status === 401)
+  if (c.error instanceof ProviderError) {
+    const status = c.error.status === 401 ? 400 : c.error.status;
     return c.json(
-      { success: false, error: c.error.code, message: c.error.message },
-      400,
+      {
+        success: false,
+        error: c.error.code,
+        message: c.error.message,
+        ...(c.error.retry_after ? { retry_after: c.error.retry_after } : {}),
+      },
+      status as 400,
+      c.error.retry_after ? { "Retry-After": String(c.error.retry_after) } : {},
     );
+  }
 });
 app.get("/", async (c) => {
   const rows = await collect<
@@ -57,8 +65,15 @@ app.get("/", async (c) => {
   });
   return c.json({
     success: true,
-    data: mailProviders.map(({ api, ...provider }) => ({
-      ...provider,
+    data: mailProviders.map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      url: provider.url,
+      docs: provider.docs,
+      credential_label: provider.credentialLabel,
+      description: provider.description,
+      integration_hint: provider.integrationHint,
+      can_create: provider.canCreate,
       account_count: rows.filter((r) => r.provider === provider.id).length,
       attention_count: rows.filter(
         (r) =>
@@ -67,11 +82,13 @@ app.get("/", async (c) => {
           ["error", "reauth_required"].includes(r.auth_status),
       ).length,
       capabilities: [
-        "create",
+        ...(provider.canCreate ? ["create"] : []),
         "connect",
         "messages",
         "verification",
-        "password_login",
+        ...(provider.id === "mailslurp" || provider.id === "mailinator"
+          ? ["api_key"]
+          : ["password_login"]),
       ],
     })),
   });
@@ -132,8 +149,12 @@ app.post("/accounts", async (c) => {
   const body = object(await c.req.json()),
     provider = providerId(body.provider);
   const mode = choice(body.mode, "接入方式", ["connect", "create"], "connect");
+  const providerInfo = mailProviders.find((p) => p.id === provider)!;
+  if (mode === "create" && !providerInfo.canCreate)
+    invalid(`${providerInfo.name} 不支持通过 MailHub 创建邮箱，请接入已有邮箱`);
+  const credentialLabel = providerInfo.credentialLabel;
   const address = email(body.address),
-    password = text(body.password, "邮箱密码", 1000);
+    password = text(body.password, credentialLabel, 1000);
   if (!password || (mode === "create" && password.length < 8))
     invalid("请填写邮箱密码；创建新邮箱时至少 8 个字符");
   const remark = text(body.remark, "用途备注", 1000);

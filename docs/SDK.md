@@ -19,7 +19,7 @@
 
 单次请求返回 `data`、HTTP `status`、`request_id`、`retry_after`、`idempotency_replayed` 和 `idempotency_key_expires_at`。异常类型 `MailHubError` 保留 `code`、`status`、`request_id`、`retry_after`、`retryable` 和结构化 `details`，不把底层网络异常中的地址或凭据原样输出。
 
-`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain" | "mailtm" | "mailgw"`。查收还支持 `since`、`sender`、`q` 和 `match`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
+`target` 必须且只能提供 `email`、`vault_id`、唯一匹配的 `platform` 之一；只有 `email` 可以附加 `source: "outlook" | "cf_domain" | "mailtm" | "mailgw" | "mailslurp" | "mailinator"`。查收还支持 `since`、`sender`、`q` 和 `match`。收到 `has_mail: true` 不代表找到验证码；应检查 `outcome` 与 `code/link`。
 
 `match` 默认为 `mailbox`，查询邮箱中符合筛选条件的验证信息，不确认平台归属，也不更新平台注册的历史验证码。`match: "platform"` 仅接受 `vault_id` 或唯一匹配的 `platform`，优先使用显式 `sender/q`，未提供的规则取登记中的 `verification_sender/verification_keyword`。两项规则都为空时返回 HTTP 409 / `VERIFICATION_RULE_REQUIRED`，应先配置规则，或由调用方明确改为邮箱范围查询。台账目标的响应包含 `match_scope/match_reason`；共享同一邮箱的不同平台应使用各自的登记 ID 和匹配规则。
 

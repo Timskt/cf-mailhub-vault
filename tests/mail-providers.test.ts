@@ -51,7 +51,14 @@ async function provider<T>(run: () => Promise<T>, override?: Handler) {
     const url = new URL(
       typeof input === "string" || input instanceof URL ? input : input.url,
     );
-    if (!["api.mail.tm", "api.mail.gw"].includes(url.hostname))
+    if (
+      ![
+        "api.mail.tm",
+        "api.mail.gw",
+        "api.mailslurp.com",
+        "api.mailinator.com",
+      ].includes(url.hostname)
+    )
       throw new Error("Unexpected request: " + url.origin);
     assert.equal(init.redirect, "manual");
     calls.push({
@@ -66,6 +73,53 @@ async function provider<T>(run: () => Promise<T>, override?: Handler) {
         { domain: "example.test", isActive: true, isPrivate: false },
         { domain: "private.test", isActive: true, isPrivate: true },
       ]);
+    if (url.pathname === "/api/v2/domains")
+      return json({
+        domains: [{ name: "provider.test", verified: true }],
+      });
+    if (url.pathname === "/api/v2/domains/provider.test/inboxes/managed") {
+      assert.equal(new Headers(init.headers).get("Authorization"), password);
+      return json({
+        domain: "provider.test",
+        to: "managed",
+        msgs: [
+          {
+            id: mail.id,
+            domain: "provider.test",
+            to: "managed",
+            subject: mail.subject,
+            from: "Example",
+            origfrom: "auth@example.test",
+            time: Date.parse(mail.createdAt),
+          },
+        ],
+      });
+    }
+    if (
+      url.pathname ===
+      `/api/v2/domains/provider.test/inboxes/managed/messages/${mail.id}`
+    ) {
+      assert.equal(new Headers(init.headers).get("Authorization"), password);
+      return json({
+        id: mail.id,
+        domain: "provider.test",
+        to: "managed",
+        subject: mail.subject,
+        from: "Example",
+        fromfull: "Example <auth@example.test>",
+        time: Date.parse(mail.createdAt),
+        parts: [
+          {
+            headers: { "content-type": "text/plain; charset=utf-8" },
+            body: "Your verification code is 238641",
+          },
+          {
+            headers: { "content-type": "text/html; charset=utf-8" },
+            body: '<a href="https://example.test/verify?token=fictional">Verify</a>',
+          },
+        ],
+      });
+    }
     if (url.pathname === "/accounts") return json(remote, 201);
     if (url.pathname === "/token") {
       const body = JSON.parse(String(init.body));
@@ -73,10 +127,11 @@ async function provider<T>(run: () => Promise<T>, override?: Handler) {
       assert.equal(body.password, password);
       return json({ id: remote.id, token });
     }
-    assert.equal(
-      new Headers(init.headers).get("Authorization"),
-      `Bearer ${token}`,
-    );
+    if (url.hostname !== "api.mailinator.com")
+      assert.equal(
+        new Headers(init.headers).get("Authorization"),
+        `Bearer ${token}`,
+      );
     if (url.pathname === "/me") return json(remote);
     if (url.pathname === "/messages") return collection([mail]);
     if (url.pathname === `/messages/${mail.id}`)
@@ -171,6 +226,319 @@ test("Mail.tm and Mail.gw connect, paginate, read bodies and extract links hidde
     assert.deepEqual(
       new Set(calls.map((c) => c.host)),
       new Set(["api.mail.tm", "api.mail.gw"]),
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("provider domain routes authorize admin API keys and reject keys without admin scope", async () => {
+  const f = await database();
+  try {
+    const admin = await createApiKey(f.env, {
+      name: "Provider domains",
+      scopes: ["admin"],
+    });
+    const writer = await createApiKey(f.env, {
+      name: "Provider writer",
+      scopes: ["mailbox:write"],
+    });
+    await provider(async () => {
+      for (const source of ["mailtm", "mailgw"]) {
+        const result = await f.request(
+          `/api/providers/${source}/domains`,
+          undefined,
+          "GET",
+          { "X-API-Key": admin.key },
+        );
+        assert.equal(result.response.status, 200, JSON.stringify(result.data));
+      }
+      for (const source of ["mailslurp", "mailinator"]) {
+        const result = await f.request(
+          `/api/providers/${source}/domains`,
+          undefined,
+          "GET",
+          { "X-API-Key": admin.key },
+        );
+        assert.equal(result.response.status, 400);
+        assert.equal(result.data.error, "PROVIDER_CAPABILITY_UNSUPPORTED");
+      }
+      const denied = await f.request(
+        "/api/providers/mailtm/domains",
+        undefined,
+        "GET",
+        { "X-API-Key": writer.key },
+      );
+      assert.equal(denied.response.status, 403);
+      assert.equal(denied.data.error, "INSUFFICIENT_SCOPE");
+    });
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("MailSlurp lookup requires exists=true even if the response contains an inbox ID", async () => {
+  const f = await database();
+  try {
+    await provider(
+      async () => {
+        const result = await f.request("/api/providers/accounts", {
+          provider: "mailslurp",
+          address,
+          password: "fictional-mailslurp-api-key",
+        });
+        assert.equal(result.response.status, 404);
+        assert.equal(result.data.error, "PROVIDER_ACCOUNT_GONE");
+        assert.equal(await db(f.env).count("provider_accounts"), 0);
+      },
+      (url) =>
+        url.pathname === "/inboxes/byEmailAddress"
+          ? json({ exists: false, inboxId: remote.id })
+          : undefined,
+    );
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("MailSlurp connects an owned inbox by address, pages and reads mail through its API key", async () => {
+  const f = await database();
+  try {
+    const { calls } = await provider(
+      async () => {
+        const catalog = await f.request("/api/providers");
+        const mailSlurp = catalog.data.data.find(
+          (entry: any) => entry.id === "mailslurp",
+        );
+        assert.equal(mailSlurp.credential_label, "MailSlurp API Key");
+        assert.equal(mailSlurp.can_create, false);
+        assert.ok(mailSlurp.capabilities.includes("api_key"));
+        const domains = await f.request("/api/providers/mailslurp/domains");
+        assert.equal(domains.response.status, 400);
+        assert.equal(domains.data.error, "PROVIDER_CAPABILITY_UNSUPPORTED");
+
+        const account = await connect(f, "mailslurp");
+        assert.equal(account.auth_status, "unchecked");
+
+        const list = await f.request(
+          `/api/providers/accounts/${account.id}/messages?page=1`,
+        );
+        assert.equal(list.response.status, 200, JSON.stringify(list.data));
+        assert.equal(list.data.total, 1);
+        assert.equal(list.data.data[0].sender, "auth@example.test");
+        assert.equal(list.data.data[0].verification_code, "238641");
+
+        const detail = await f.request(
+          `/api/providers/accounts/${account.id}/messages/${mail.id}`,
+        );
+        assert.equal(detail.response.status, 200, JSON.stringify(detail.data));
+        assert.equal(
+          detail.data.data.text_content,
+          "Your verification code is 238641",
+        );
+
+        const code = await f.request(
+          `/api/providers/accounts/${account.id}/code?sender=auth&q=verification`,
+        );
+        assert.equal(code.data.data.code, "238641");
+
+        const checked = await f.request(
+          `/api/providers/accounts/${account.id}/check`,
+          {},
+          "POST",
+        );
+        assert.equal(
+          checked.response.status,
+          200,
+          JSON.stringify(checked.data),
+        );
+      },
+      (url, init) => {
+        if (url.hostname !== "api.mailslurp.com") return undefined;
+        assert.equal(new Headers(init.headers).get("x-api-key"), password);
+        if (url.pathname === "/inboxes/byEmailAddress") {
+          assert.equal(url.searchParams.get("emailAddress"), address);
+          return json({ exists: true, inboxId: remote.id });
+        }
+        if (url.pathname === `/inboxes/${remote.id}`)
+          return json({ id: remote.id, emailAddress: address });
+        if (url.pathname === `/inboxes/${remote.id}/emails/paginated`)
+          return json({
+            content: [
+              {
+                id: mail.id,
+                inboxId: remote.id,
+                from: "auth@example.test",
+                fromName: "Example",
+                to: [address],
+                subject: "Sign in",
+                bodyExcerpt: "Open the message to continue",
+                textExcerpt: "Your verification code is 238641",
+                createdAt: mail.createdAt,
+                read: false,
+                attachments: [],
+              },
+            ],
+            totalElements: 1,
+          });
+        if (url.pathname === `/emails/${mail.id}`)
+          return json({
+            id: mail.id,
+            inboxId: remote.id,
+            from: "auth@example.test",
+            fromName: "Example",
+            to: [address],
+            subject: "Sign in",
+            body: "Your verification code is 238641",
+            isHTML: false,
+            createdAt: mail.createdAt,
+            read: false,
+          });
+        throw new Error(`Unexpected MailSlurp route: ${url.pathname}`);
+      },
+    );
+    assert.equal(
+      calls.some((call) => call.path === "/domains"),
+      false,
+    );
+    assert.ok(calls.some((call) => call.path === "/inboxes/byEmailAddress"));
+    assert.ok(calls.some((call) => call.path === `/emails/${mail.id}`));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("Mailinator connects only an owned private domain and safely reads messages", async () => {
+  const f = await database();
+  try {
+    const offsets: number[] = [];
+    const summary = (id: string) => ({
+      id,
+      domain: "provider.test",
+      to: "managed",
+      subject: mail.subject,
+      from: "Example",
+      origfrom: "auth@example.test",
+      time: Date.parse(mail.createdAt),
+    });
+    const { calls } = await provider(
+      async () => {
+        const catalog = await f.request("/api/providers");
+        const mailinator = catalog.data.data.find(
+          (entry: any) => entry.id === "mailinator",
+        );
+        assert.equal(mailinator.credential_label, "Mailinator API Token");
+        assert.equal(mailinator.can_create, false);
+        assert.ok(mailinator.capabilities.includes("api_key"));
+        const domains = await f.request("/api/providers/mailinator/domains");
+        assert.equal(domains.response.status, 400);
+        assert.equal(domains.data.error, "PROVIDER_CAPABILITY_UNSUPPORTED");
+
+        const account = await connect(f, "mailinator");
+        assert.equal(account.remote_id, "provider.test");
+        assert.equal(account.auth_status, "unchecked");
+        assert.equal(JSON.stringify(account).includes(password), false);
+
+        const list = await f.request(
+          `/api/providers/accounts/${account.id}/messages?page=1`,
+        );
+        assert.equal(list.response.status, 200, JSON.stringify(list.data));
+        assert.equal(list.data.total, 31);
+        assert.equal(list.data.has_more, true);
+        assert.equal(list.data.data.length, 30);
+        assert.equal(list.data.data[0].sender, "auth@example.test");
+
+        const next = await f.request(
+          `/api/providers/accounts/${account.id}/messages?page=2`,
+        );
+        assert.equal(next.response.status, 200, JSON.stringify(next.data));
+        assert.equal(next.data.total, 31);
+        assert.equal(next.data.has_more, false);
+        assert.equal(next.data.data.length, 1);
+        assert.deepEqual(offsets.slice(0, 2), [0, 30]);
+
+        const detail = await f.request(
+          `/api/providers/accounts/${account.id}/messages/${mail.id}`,
+        );
+        assert.equal(detail.response.status, 200, JSON.stringify(detail.data));
+        assert.equal(detail.data.data.verification_code, "238641");
+        assert.match(detail.data.data.html_content, /example\.test\/verify/);
+
+        const code = await f.request(
+          `/api/providers/accounts/${account.id}/code?sender=auth&q=verification`,
+        );
+        assert.equal(code.data.data.code, "238641");
+        assert.match(code.data.data.link, /verify/);
+
+        const checked = await f.request(
+          `/api/providers/accounts/${account.id}/check`,
+          {},
+          "POST",
+        );
+        assert.equal(
+          checked.response.status,
+          200,
+          JSON.stringify(checked.data),
+        );
+        assert.equal(
+          (await f.request(`/api/providers/accounts/${account.id}`)).data.data
+            .auth_status,
+          "healthy",
+        );
+      },
+      (url) => {
+        if (
+          url.hostname !== "api.mailinator.com" ||
+          url.pathname !== "/api/v2/domains/provider.test/inboxes/managed" ||
+          url.searchParams.get("limit") !== "31"
+        )
+          return undefined;
+        const offset = Number(url.searchParams.get("skip") || 0);
+        offsets.push(offset);
+        const messages =
+          offset === 0
+            ? Array.from({ length: 31 }, (_, index) =>
+                summary(index === 0 ? mail.id : `message-${index}`),
+              )
+            : [summary("older-message")];
+        return json({ domain: "provider.test", to: "managed", msgs: messages });
+      },
+    );
+    assert.ok(calls.some((call) => call.path === "/api/v2/domains"));
+    assert.ok(
+      calls.some((call) =>
+        call.path.startsWith("/api/v2/domains/provider.test/inboxes/managed"),
+      ),
+    );
+    assert.ok(calls.every((call) => !call.path.includes("token=")));
+    assert.ok(calls.every((call) => call.host === "api.mailinator.com"));
+  } finally {
+    await f.dispose();
+  }
+});
+
+test("Mailinator rejects addresses outside the token owner's private domains", async () => {
+  const f = await database();
+  try {
+    await provider(
+      async () => {
+        const result = await f.request("/api/providers/accounts", {
+          provider: "mailinator",
+          address,
+          password,
+          mode: "connect",
+        });
+        assert.equal(result.response.status, 400);
+        assert.equal(result.data.error, "PROVIDER_DOMAIN_NOT_OWNED");
+        assert.equal(
+          (await f.request("/api/providers/accounts")).data.total,
+          0,
+        );
+      },
+      (url) =>
+        url.pathname === "/api/v2/domains"
+          ? json({ domains: [{ name: "other-private.test", verified: true }] })
+          : undefined,
     );
   } finally {
     await f.dispose();
@@ -381,6 +749,23 @@ test("new mailbox creation retains a recoverable local credential on ambiguous r
   }
 });
 
+test("providers without mailbox creation return a provider-specific capability error", async () => {
+  const f = await database();
+  try {
+    const result = await f.request("/api/providers/accounts", {
+      provider: "mailinator",
+      mode: "create",
+      address: "managed@private.test",
+      password: "fictional-api-token",
+    });
+    assert.equal(result.response.status, 400);
+    assert.match(result.data.message, /Mailinator Private/);
+    assert.match(result.data.message, /接入已有邮箱/);
+  } finally {
+    await f.dispose();
+  }
+});
+
 test("provider identity mismatch is rejected, malformed domains and rate limits are explicit, disabled accounts perform no fetch", async () => {
   const f = await database();
   try {
@@ -408,8 +793,15 @@ test("provider identity mismatch is rejected, malformed domains and rate limits 
         const r = await f.request(`/api/providers/accounts/${a.id}/messages`);
         assert.equal(r.response.status, 429);
         assert.equal(r.data.error, "PROVIDER_RATE_LIMITED");
+        assert.equal(r.data.retry_after, 17);
+        assert.equal(r.response.headers.get("Retry-After"), "17");
       },
-      (url) => (url.pathname === "/messages" ? json({}, 429) : undefined),
+      (url) => {
+        if (url.pathname !== "/messages") return undefined;
+        const response = json({}, 429);
+        response.headers.set("Retry-After", "17");
+        return response;
+      },
     );
     await provider(
       async () => {

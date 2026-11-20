@@ -8,7 +8,7 @@
 
 在「临时邮箱 → 批量分配邮箱」选择一个或多个已接入域名、总数量、用途前缀、有效期和备注。例如前缀 `shopping`、备注「购物账号专用」，一次分配 20 个地址，依次用于不同商店。地址会轮流分配到选中的域名，并追加序号和随机后缀。
 
-先预览完整清单；预览不写入数据。确认创建后整批写入，任何地址冲突或域名无效都不会留下部分新建记录。成功页支持复制所有地址与导出 JSON 清单。若提交期间网络断开，先刷新列表核对结果，再重试；重复提交相同地址会被拒绝。
+先预览完整清单；预览按域名统计分配数量，并以编号表格显示地址，预览不写入数据。可选常用数量或输入 1–100 的总数，也可一次全选或清空域名。确认创建后整批写入，任何地址冲突或域名无效都不会留下部分新建记录。成功页支持复制所有地址与导出 JSON 清单。若提交期间网络断开，先刷新列表核对结果，再重试；重复提交相同地址会被拒绝。
 
 列表支持按用途备注搜索、编辑用途，显示已有邮件总数、未读数和最近来信时间。统计基于当前保留的邮件，邮件清理后会相应变化。永久邮箱及绑定平台的地址继续沿用原有保护规则。
 
@@ -42,19 +42,19 @@
 
 所有新增接口均要求管理员会话或 API Key，且拒绝跨站写入。完整接口表可从 `/api-doc.json`、`/api-doc.md` 读取。
 
-| 接口 | 主要参数 / 返回 |
-|---|---|
+| 接口                                | 主要参数 / 返回                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `POST /api/mailboxes/batch-preview` | `domains`, `count`（1–100）, `prefix`, `remark`, `duration_minutes`, `is_permanent`；返回预览数组 |
-| `POST /api/mailboxes/batch` | `{mailboxes: 预览数组}`；整批创建 |
-| `PATCH /api/mailboxes/:id` | `{remark: "用途"}` |
-| `GET /api/cf-mails` | 新增 `folder=all/inbox/archived`, `category`；默认 `all` 保持已有 API 行为；页面默认 `inbox` |
-| `PATCH /api/cf-mails/:id` | 布尔字段 `is_pinned`, `is_read`, `is_archived`；以及 `category` |
-| `POST /api/cf-mails/batch` | `{ids: [...], patch: {...}}`，1–100 个 ID |
-| `GET / POST /api/mail-rules` | 列出规则 / 新建规则 |
-| `PUT / DELETE /api/mail-rules/:id` | 编辑完整规则 / 删除规则 |
-| `POST /api/mail-rules/preview` | 规则草稿；返回摘要，不写入 |
-| `POST /api/mail-rules/:id/preview` | 返回 `mails`, `total`, `limited`, `revision`, `changes` |
-| `POST /api/mail-rules/:id/apply` | `{ids: [...], revision: "预览版本"}` |
+| `POST /api/mailboxes/batch`         | `{mailboxes: 预览数组}`；整批创建                                                                 |
+| `PATCH /api/mailboxes/:id`          | `{remark: "用途"}`                                                                                |
+| `GET /api/cf-mails`                 | 新增 `folder=all/inbox/archived`, `category`；默认 `all` 保持已有 API 行为；页面默认 `inbox`      |
+| `PATCH /api/cf-mails/:id`           | 布尔字段 `is_pinned`, `is_read`, `is_archived`；以及 `category`                                   |
+| `POST /api/cf-mails/batch`          | `{ids: [...], patch: {...}}`，1–100 个 ID                                                         |
+| `GET / POST /api/mail-rules`        | 列出规则 / 新建规则                                                                               |
+| `PUT / DELETE /api/mail-rules/:id`  | 编辑完整规则 / 删除规则                                                                           |
+| `POST /api/mail-rules/preview`      | 规则草稿；返回摘要，不写入                                                                        |
+| `POST /api/mail-rules/:id/preview`  | 返回 `mails`, `total`, `limited`, `revision`, `changes`                                           |
+| `POST /api/mail-rules/:id/apply`    | `{ids: [...], revision: "预览版本"}`                                                              |
 
 分类枚举：`general`, `verification`, `billing`, `newsletter`, `notification`。
 

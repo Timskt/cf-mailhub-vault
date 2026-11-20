@@ -303,11 +303,106 @@
   .selection-bar {
     @apply flex flex-wrap items-center gap-3 border-b bg-accent/50 px-4 py-3 text-sm;
   }
+  .mailbox-selection-bar {
+    @apply border-b bg-accent/30;
+  }
   .page-footnote {
     @apply mt-4 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground;
   }
   .modal-form {
     @apply flex min-h-0 min-w-0 flex-1 flex-col;
+  }
+  .batch-stepper {
+    @apply flex shrink-0 items-center gap-5 border-b px-6 py-3;
+  }
+  .batch-stepper li {
+    @apply inline-flex items-center gap-2 text-xs text-muted-foreground;
+  }
+  .batch-stepper li > span {
+    @apply flex size-6 items-center justify-center rounded-full border font-mono text-[11px] tabular-nums;
+  }
+  .batch-stepper li[data-current="true"] {
+    @apply font-medium text-foreground;
+  }
+  .batch-stepper li[data-current="true"] > span {
+    @apply border-primary bg-primary text-primary-foreground;
+  }
+  .batch-stepper li[data-complete="true"] > span {
+    @apply border-success bg-success text-white;
+  }
+  .batch-dialog-body {
+    @apply gap-4;
+  }
+  .batch-config-layout {
+    @apply grid min-w-0 gap-5;
+  }
+  .batch-config-fields {
+    @apply min-w-0;
+  }
+  .batch-side-summary,
+  .batch-preview-summary {
+    @apply flex min-w-0 flex-col gap-3 rounded-md border bg-muted/30 p-4;
+  }
+  .batch-summary-count {
+    @apply mt-1 font-mono text-4xl leading-none font-semibold tabular-nums text-foreground;
+  }
+  .batch-summary-facts {
+    @apply flex flex-col gap-2 border-y py-3 text-xs;
+  }
+  .batch-summary-facts > div {
+    @apply flex items-center justify-between gap-3;
+  }
+  .batch-summary-facts dt {
+    @apply text-muted-foreground;
+  }
+  .batch-summary-facts dd {
+    @apply font-medium tabular-nums;
+  }
+  .batch-side-summary section > h3,
+  .batch-preview-summary section > h3 {
+    @apply mb-1 text-sm font-medium;
+  }
+  .batch-domain-ledger {
+    @apply flex max-h-48 flex-col overflow-y-auto;
+  }
+  .batch-domain-ledger > div {
+    @apply flex min-w-0 items-center justify-between gap-3 border-b py-2 text-xs last:border-b-0;
+  }
+  .batch-domain-ledger > div > span {
+    @apply min-w-0 truncate text-muted-foreground;
+  }
+  .batch-domain-ledger > div > strong {
+    @apply shrink-0 font-mono tabular-nums;
+  }
+  .batch-domain-ledger > p {
+    @apply py-3 text-xs text-muted-foreground;
+  }
+  .batch-preview-layout {
+    @apply grid min-w-0 gap-4;
+  }
+  .batch-preview-main {
+    @apply flex min-w-0 flex-col gap-3;
+  }
+  .batch-preview-controls {
+    @apply grid min-w-0 items-end gap-3;
+  }
+  .batch-preview-actions {
+    @apply flex min-w-0 flex-wrap items-center justify-between gap-2;
+  }
+  .batch-preview-addresses {
+    @apply max-h-[min(54dvh,540px)] min-w-0 overflow-auto rounded-md border;
+  }
+  .batch-preview-summary {
+    @apply h-fit;
+  }
+  .batch-preview-count {
+    @apply flex items-baseline gap-2;
+  }
+  .batch-preview-count > strong {
+    @apply font-mono text-3xl leading-none font-semibold tabular-nums;
+  }
+  .batch-preview-count > span {
+    @apply text-sm text-muted-foreground;
   }
   .form-grid {
     @apply grid grid-cols-1 gap-5 sm:grid-cols-2;
@@ -603,6 +698,46 @@
     padding: 18px 14px;
   }
 }
+
+@media (min-width: 1101px) {
+  .data-panel[data-density="comfortable"] .desktop-table {
+    display: none;
+  }
+  .data-panel[data-density="comfortable"] .mobile-records {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 12px;
+  }
+  .data-panel[data-density="comfortable"] .mobile-record {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+}
+@media (min-width: 1024px) {
+  .batch-config-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
+    align-items: start;
+  }
+  .batch-side-summary,
+  .batch-preview-summary {
+    position: sticky;
+    top: 0;
+    max-height: min(62dvh, 580px);
+    overflow-y: auto;
+  }
+  .batch-preview-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 270px);
+    align-items: start;
+  }
+  .batch-preview-controls {
+    grid-template-columns: minmax(130px, 1fr) minmax(160px, 2fr) auto;
+  }
+}
 @media (max-width: 767px) {
   .global-search-trigger {
     width: 36px;
@@ -625,6 +760,9 @@
   .mobile-record:nth-child(odd) {
     border-right: 0;
   }
+  .data-panel[data-density="comfortable"] .mobile-records {
+    grid-template-columns: 1fr;
+  }
   .health-strip {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -644,6 +782,20 @@
   .filter-bar [data-slot="select-trigger"] {
     flex: 1;
     min-width: 100px;
+  }
+  .batch-stepper {
+    justify-content: space-between;
+    gap: 2px;
+    padding-inline: 16px;
+  }
+  .batch-dialog-body {
+    padding: 16px;
+  }
+  .batch-preview-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .batch-preview-actions {
+    justify-content: space-between;
   }
   .reader-layout {
     display: flex;
@@ -704,5 +856,18 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+.mailbox-batch-dialog {
+  width: min(calc(100vw - 32px), 1100px);
+  max-width: 1100px;
+  height: min(88dvh, 860px);
+}
+@media (max-width: 767px) {
+  .mailbox-batch-dialog {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
   }
 }

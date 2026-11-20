@@ -63,7 +63,7 @@ curl --fail-with-body "$MAILHUB_URL/api/automation/verification" \
 ```
 
 
-email、vault_id、platform 三者只能提供一个。平台有多个账号返回 AMBIGUOUS_TARGET；请改用具体 ID 或邮箱。email 可显式提供 source=outlook/cf_domain/mailtm/mailgw。未知来源不会伪装为正常的空自建邮箱，可先 inspectMailbox 查看原因。Outlook 查收扫描收件箱和垃圾箱，最多各 25 封；CF 最多最近 25 封匹配邮件。limited=true 表示扫描窗口可能不足，应收窄 since/sender/q。
+email、vault_id、platform 三者只能提供一个。平台有多个账号返回 AMBIGUOUS_TARGET；请改用具体 ID 或邮箱。email 可显式提供 source=outlook/cf_domain/mailtm/mailgw/mailslurp/mailinator。未知来源不会伪装为正常的空自建邮箱，可先 inspectMailbox 查看原因。Outlook 查收扫描收件箱和垃圾箱，最多各 25 封；CF 最多最近 25 封匹配邮件。limited=true 表示扫描窗口可能不足，应收窄 since/sender/q。
 
 统一查收及批次每项支持 match=mailbox|platform，GET /api/vault/{id}/code 同样支持。默认 mailbox 保留按邮箱查询的兼容行为；台账目标使用 mailbox_address（空则 account_email）与 email_source，响应 match_scope=mailbox、match_reason 说明未确认归属平台，且不更新平台历史验证码。platform 必须使用 vault_id 或唯一 platform，按显式 sender/q 或登记的 verification_sender/verification_keyword 匹配；至少须有一条规则，否则返回 409 VERIFICATION_RULE_REQUIRED，绝不自动回退整个邮箱。直接 email 加 match=platform 返回 400 PLATFORM_TARGET_REQUIRED。platform 结果返回 match_scope/match_reason；找到验证码后，写入 last_code/last_code_at 前在同一事务中以 CAS 核对目标、收件关联及验证规则，查询期间发生变化返回 409 STALE_PREVIEW，不保存本次历史验证码。应刷新台账、核对当前规则后重新查收。mailbox_link_state=detached 的台账目标返回 409 MAILBOX_DETACHED。发件人/关键词是业务匹配条件，不保证共用邮箱中的邮件隔离。
 

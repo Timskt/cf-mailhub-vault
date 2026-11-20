@@ -52,11 +52,51 @@ async function providerMock(page: Page) {
     if (path === "/api/providers")
       return respond({
         success: true,
-        data: ["mailtm", "mailgw"].map((id) => ({
-          id,
-          name: id === "mailtm" ? "Mail.tm" : "Mail.gw",
-          account_count: accounts.filter((a) => a.provider === id).length,
-          attention_count: 0,
+        data: [
+          {
+            id: "mailtm",
+            name: "Mail.tm",
+            description: "临时邮箱 · 账号密码登录",
+            integration_hint: "Mail.tm 与 Mail.gw 使用同一 API 家族",
+            credential_label: "邮箱密码",
+            can_create: true,
+          },
+          {
+            id: "mailgw",
+            name: "Mail.gw",
+            description: "临时邮箱 · 账号密码登录",
+            integration_hint: "Mail.tm 与 Mail.gw 使用同一 API 家族",
+            credential_label: "邮箱密码",
+            can_create: true,
+          },
+          {
+            id: "mailslurp",
+            name: "MailSlurp",
+            description: "测试邮箱 API · 需使用自己的 MailSlurp 账户",
+            integration_hint: "请先创建 Inbox，再接入",
+            credential_label: "MailSlurp API Key",
+            can_create: false,
+          },
+          {
+            id: "mailinator",
+            name: "Mailinator Private",
+            description: "私有域收件 API · 按地址读取",
+            integration_hint: "只接入账户私有域",
+            credential_label: "Mailinator API Token",
+            can_create: false,
+          },
+        ].map((provider) => ({
+          ...provider,
+          url: "https://example.test",
+          docs: "https://example.test/docs",
+          account_count: accounts.filter((a) => a.provider === provider.id)
+            .length,
+          attention_count: accounts.filter(
+            (a) =>
+              a.provider === provider.id &&
+              ["error", "reauth_required"].includes(a.auth_status),
+          ).length,
+          capabilities: [provider.can_create ? "create" : "api_key"],
         })),
       });
     if (path.endsWith("/domains"))
@@ -101,19 +141,31 @@ async function providerMock(page: Page) {
           (!url.searchParams.get("provider") ||
             a.provider === url.searchParams.get("provider")) &&
           (!url.searchParams.get("q") ||
-            a.address.includes(url.searchParams.get("q"))),
+            `${a.address} ${a.remark || ""}`.includes(
+              url.searchParams.get("q"),
+            )) &&
+          (!url.searchParams.get("status") ||
+            url.searchParams.get("status") === "all" ||
+            (url.searchParams.get("status") === "attention"
+              ? ["error", "reauth_required"].includes(a.auth_status)
+              : a.status === url.searchParams.get("status"))),
       );
+      const limit = Number(url.searchParams.get("limit") || 30),
+        pageNumber = Number(url.searchParams.get("page") || 1);
       return respond({
         success: true,
-        data: filtered.map(safe),
+        data: filtered
+          .slice((pageNumber - 1) * limit, pageNumber * limit)
+          .map(safe),
         total: filtered.length,
-        page: 1,
-        limit: 30,
+        page: pageNumber,
+        limit,
       });
     }
-    const a = accounts.find((a) =>
-      path.startsWith(`/api/providers/accounts/${a.id}`),
+    const accountId = Number(
+      path.match(/^\/api\/providers\/accounts\/(\d+)(?:\/|$)/)?.[1],
     );
+    const a = accounts.find((account) => account.id === accountId);
     if (!a) return respond({ success: false, message: "不存在" }, 404);
     if (path.endsWith("/check")) {
       a.auth_status = "healthy";
@@ -151,14 +203,25 @@ async function providerMock(page: Page) {
       verification_link: "https://example.test/verify?token=fictional",
       has_attachments: false,
     };
-    if (path.endsWith("/messages"))
+    if (path.endsWith("/messages")) {
+      const pageNumber = Number(url.searchParams.get("page") || 1);
+      const pagedMailinator = a.provider === "mailinator";
       return respond({
         success: true,
-        data: [mail],
-        total: 1,
-        page: 1,
+        data: pagedMailinator
+          ? pageNumber === 1
+            ? Array.from({ length: 30 }, (_, index) => ({
+                ...mail,
+                id: `message-${index + 1}`,
+              }))
+            : [mail]
+          : [mail],
+        total: pagedMailinator ? 31 : 1,
+        ...(pagedMailinator ? { has_more: pageNumber === 1 } : {}),
+        page: pageNumber,
         limit: 30,
       });
+    }
     if (path.endsWith("/messages/message123"))
       return respond({ success: true, data: mail });
     if (method === "PUT") {
@@ -464,4 +527,199 @@ test("unavailable domain API shows retry and blocks creation while existing-acco
   await expect(
     dialog.getByRole("button", { name: "创建并保存", exact: true }),
   ).toBeEnabled();
+});
+
+test("large provider pools paginate densely and MailSlurp uses an API key for an existing inbox", async ({
+  page,
+  context,
+}, info) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const mock = await providerMock(page);
+  mock.accounts.push(
+    ...Array.from({ length: 45 }, (_, index) => ({
+      id: index + 1,
+      provider: index % 2 ? "mailtm" : "mailgw",
+      address: `member-${String(index + 1).padStart(3, "0")}@fixture.test`,
+      remote_id: `remote-${index + 1}`,
+      password: "Fictional-only-password",
+      status: "active",
+      auth_status: index === 2 ? "error" : "healthy",
+      remark: index === 2 ? "needs repair" : "test inbox",
+      has_password: true,
+      credential_version: "v1",
+      last_checked_at: "2026-11-20T10:00:00.000Z",
+      last_error: index === 2 ? "Upstream timeout" : "",
+      last_error_code: index === 2 ? "PROVIDER_TIMEOUT" : "",
+      created_at: "2026-11-20T10:00:00.000Z",
+      updated_at: "2026-11-20T10:00:00.000Z",
+    })),
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await login(page);
+
+  const table = page.getByRole("table", { name: "外部邮箱账号紧凑列表" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("row")).toHaveCount(31);
+  await expect(
+    page.getByRole("button", { name: /Mail\.gw 23 1 需处理/ }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "全部来源 45", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("服务商与接入方式", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "接入已有 Inbox", exact: true }),
+  ).toBeHidden();
+  await page.screenshot({
+    animations: "disabled",
+    path: info.outputPath("provider-accounts-compact-desktop.png"),
+  });
+  await page.getByRole("checkbox", { name: "选择全部当前页" }).click();
+  await expect(
+    page.getByText("已选择 30 个账号（本页 30 个）", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "复制选中邮箱", exact: true }).click();
+  expect(
+    (await page.evaluate(() => navigator.clipboard.readText())).split("\n"),
+  ).toHaveLength(30);
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(table.getByRole("row")).toHaveCount(16);
+  await expect(
+    page.getByText("已选择 30 个账号（本页 0 个）", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("checkbox", { name: "选择全部当前页" }).click();
+  await expect(
+    page.getByText("已选择 45 个账号（本页 15 个）", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "复制选中邮箱", exact: true }).click();
+  expect(
+    (await page.evaluate(() => navigator.clipboard.readText())).split("\n"),
+  ).toHaveLength(45);
+
+  await page.getByRole("combobox", { name: "每页条数" }).click();
+  await page.getByRole("option", { name: "每页 50 条", exact: true }).click();
+  await expect(table.getByRole("row")).toHaveCount(46);
+  await expect(
+    table.getByText("Upstream timeout", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "舒展", exact: true }).click();
+  await expect(table).toBeHidden();
+  await expect(
+    page.getByRole("article", {
+      name: "外部邮箱 member-001@fixture.test",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "紧凑", exact: true }).click();
+  await expect(table).toBeVisible();
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(table).toBeHidden();
+  await expect(
+    page.getByRole("article", {
+      name: "外部邮箱 member-001@fixture.test",
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(table).toBeHidden();
+  await expect(
+    page.getByRole("article", {
+      name: "外部邮箱 member-001@fixture.test",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page.screenshot({
+    animations: "disabled",
+    path: info.outputPath("provider-accounts-compact-mobile.png"),
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: /Mail\.tm 22/ }).click();
+  await expect(page.getByText("共 22 条记录", { exact: true })).toBeVisible();
+
+  await page.getByText("服务商与接入方式", { exact: true }).click();
+  await page
+    .getByRole("button", { name: "接入已有 Inbox", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "接入外部邮箱",
+    exact: true,
+  });
+  await dialog.getByRole("combobox", { name: "邮箱服务商" }).click();
+  await page.getByRole("option", { name: "MailSlurp", exact: true }).click();
+  await expect(
+    dialog.getByRole("tab", { name: "创建新邮箱", exact: true }),
+  ).toHaveCount(0);
+  await dialog
+    .getByLabel("邮箱地址", { exact: true })
+    .fill("qa@mailslurp.test");
+  await dialog
+    .getByLabel("MailSlurp API Key", { exact: true })
+    .fill("Fictional-mail-s-l-u-r-p-key");
+  await expect(dialog.getByText(/先在 MailSlurp 创建 Inbox/)).toBeVisible();
+  await dialog.getByRole("button", { name: "验证并接入", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(mock.accounts.at(-1).provider).toBe("mailslurp");
+  expect(mock.accounts.at(-1).password).toBe("Fictional-mail-s-l-u-r-p-key");
+
+  await page.getByRole("button", { name: "接入私有邮箱", exact: true }).click();
+  const mailinatorDialog = page.getByRole("dialog", {
+    name: "接入外部邮箱",
+    exact: true,
+  });
+  await mailinatorDialog
+    .getByLabel("邮箱地址", { exact: true })
+    .fill("qa@team.testinator.com");
+  await mailinatorDialog
+    .getByLabel("Mailinator API Token", { exact: true })
+    .fill("Fictional-mailinator-token");
+  await expect(mailinatorDialog.getByText(/公共收件箱/)).toBeVisible();
+  await mailinatorDialog
+    .getByRole("button", { name: "验证并接入", exact: true })
+    .click();
+  await expect(mailinatorDialog).toHaveCount(0);
+  expect(mock.accounts.at(-1).provider).toBe("mailinator");
+  await page.getByRole("button", { name: "全部来源 47", exact: true }).click();
+  await page.getByRole("searchbox").first().fill("qa@team.testinator.com");
+  const mailinatorAccount = page.getByRole("article", {
+    name: "外部邮箱 qa@team.testinator.com",
+    exact: true,
+  });
+  await mailinatorAccount
+    .getByRole("button", { name: "收件", exact: true })
+    .click();
+  const mailinatorReader = page.getByRole("dialog", {
+    name: "Mailinator Private 收件箱",
+    exact: true,
+  });
+  await expect(
+    mailinatorReader.getByText("至少 31 条记录", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    mailinatorReader.getByText("1 / 2+", { exact: true }),
+  ).toBeVisible();
+  await mailinatorReader
+    .getByRole("button", { name: "下一页", exact: true })
+    .click();
+  await expect(
+    mailinatorReader.getByText("共 31 条记录", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    mailinatorReader.getByText("2 / 2", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    mailinatorReader.getByRole("button", { name: "下一页", exact: true }),
+  ).toBeDisabled();
 });
